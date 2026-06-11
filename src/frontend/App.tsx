@@ -38,6 +38,9 @@ export function App() {
   const [mergePair, setMergePair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
   const [commitLabel, setCommitLabel] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // REVG の開閉は App 側で持つ。RevGView は常時マウントしたままサムネイルキャッシュを温存し、
+  // active で描画/集約だけ切り替える（展開のたびに全ノード再生成して固まるのを防ぐ）。
+  const [revgOpen, setRevgOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const psdInputRef = useRef<HTMLInputElement>(null);
@@ -359,19 +362,34 @@ export function App() {
           )}
         </Section>
 
-        <Section title="REVG" defaultOpen={false}>
-          <p className="hint">
-            ノードクリックで対応領域をハイライト。枠色は操作クラス（brush=赤 / color=青 / rigid=緑 /
-            deform=黄 / edit=紫）。
-          </p>
+        {/* REVG は Section で unmount すると展開のたびに全ノードのサムネイルを replay 込みで
+            作り直して重い。常時マウントし、active で描画/集約だけ切り替える。 */}
+        <section className={`fsec ${revgOpen ? 'open' : 'closed'}`}>
+          <div className="fsec-head">
+            <button
+              className="fsec-toggle"
+              onClick={() => setRevgOpen((o) => !o)}
+              title={revgOpen ? '折りたたむ' : '展開'}
+            >
+              {revgOpen ? '−' : '+'}
+              <span className="fsec-title">REVG</span>
+            </button>
+          </div>
+          <div className="fsec-body" style={{ display: revgOpen ? undefined : 'none' }}>
+            <p className="hint">
+              ノードクリックで対応領域をハイライト。枠色は操作クラス（brush=赤 / color=青 / rigid=緑 /
+              deform=黄 / edit=紫）。
+            </p>
+          </div>
           <RevGView
             session={session}
             dag={dag}
             version={deferredVersion}
+            active={revgOpen}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
           />
-        </Section>
+        </section>
       </FloatWindow>
 
       {diffPair && (

@@ -21,35 +21,6 @@ export interface TransformParams {
 
 const MAX_DIM = 8192; // 暴走防止（極端な拡大時の上限）
 
-/** プリマルチプライ・バイリニア標本化（境界外は透明）。x,y はソースバッファのピクセル中心座標。 */
-function sample(src: { width: number; height: number; data: Uint8ClampedArray }, x: number, y: number): [number, number, number, number] {
-  const { width: w, height: h, data: d } = src;
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const fx = x - x0;
-  const fy = y - y0;
-  const at = (px: number, py: number): [number, number, number, number] => {
-    if (px < 0 || py < 0 || px >= w || py >= h) return [0, 0, 0, 0];
-    const i = (py * w + px) * 4;
-    const a = d[i + 3] / 255;
-    return [d[i] * a, d[i + 1] * a, d[i + 2] * a, d[i + 3]]; // premultiplied rgb, alpha 0..255
-  };
-  const c00 = at(x0, y0);
-  const c10 = at(x0 + 1, y0);
-  const c01 = at(x0, y0 + 1);
-  const c11 = at(x0 + 1, y0 + 1);
-  const out: [number, number, number, number] = [0, 0, 0, 0];
-  for (let k = 0; k < 4; k++) {
-    const top = c00[k] + (c10[k] - c00[k]) * fx;
-    const bot = c01[k] + (c11[k] - c01[k]) * fx;
-    out[k] = top + (bot - top) * fy;
-  }
-  const pa = out[3];
-  if (pa <= 0) return [0, 0, 0, 0];
-  const af = pa / 255;
-  return [out[0] / af, out[1] / af, out[2] / af, pa];
-}
-
 function transformLayer(layer: Layer, m: TransformParams): Layer {
   const src = layer.buffer;
   const ox = layer.offsetX;
@@ -89,22 +60,56 @@ function transformLayer(layer: Layer, m: TransformParams): Layer {
   const ie = -(ia * m.e + ic * m.f);
   const iff = -(ib * m.e + id * m.f);
 
+  // プリマルチプライ・バイリニア標本化（境界外は透明）をピクセル毎にインライン展開する。
+  // 旧実装は1画素あたり配列を5個確保していて GC 負荷で重かった。スカラー化で確保ゼロにする。
+  // 演算順（top/bot）は旧実装と同一なので結果はビット一致。
+  const sw = src.width;
+  const sh = src.height;
+  const sd = src.data;
   const out = createImageBuffer(nW, nH);
   const od = out.data;
   for (let uy = 0; uy < nH; uy++) {
     const cy = uy + nMinY + 0.5; // 出力ピクセル中心（キャンバス座標）
     for (let ux = 0; ux < nW; ux++) {
       const cx = ux + nMinX + 0.5;
-      const sxCanvas = ia * cx + ic * cy + ie;
-      const syCanvas = ib * cx + id * cy + iff;
-      const bx = sxCanvas - ox - 0.5; // ソースバッファのピクセル中心座標
-      const by = syCanvas - oy - 0.5;
-      const [r, g, b, a] = sample(src, bx, by);
+      const bx = ia * cx + ic * cy + ie - ox - 0.5; // ソースバッファのピクセル中心座標
+      const by = ib * cx + id * cy + iff - oy - 0.5;
+      const x0 = Math.floor(bx);
+      const y0 = Math.floor(by);
+      const x1 = x0 + 1;
+      const y1 = y0 + 1;
+      const fx = bx - x0;
+      const fy = by - y0;
+      const x0ok = x0 >= 0 && x0 < sw;
+      const x1ok = x1 >= 0 && x1 < sw;
+      const y0ok = y0 >= 0 && y0 < sh;
+      const y1ok = y1 >= 0 && y1 < sh;
+      // 4近傍のプリマルチプライ済み rgb と生アルファ（範囲外は 0）。
+      let r00 = 0, g00 = 0, b00 = 0, a00 = 0;
+      let r10 = 0, g10 = 0, b10 = 0, a10 = 0;
+      let r01 = 0, g01 = 0, b01 = 0, a01 = 0;
+      let r11 = 0, g11 = 0, b11 = 0, a11 = 0;
+      if (y0ok && x0ok) { const i = (y0 * sw + x0) * 4; const a = sd[i + 3], af = a / 255; r00 = sd[i] * af; g00 = sd[i + 1] * af; b00 = sd[i + 2] * af; a00 = a; }
+      if (y0ok && x1ok) { const i = (y0 * sw + x1) * 4; const a = sd[i + 3], af = a / 255; r10 = sd[i] * af; g10 = sd[i + 1] * af; b10 = sd[i + 2] * af; a10 = a; }
+      if (y1ok && x0ok) { const i = (y1 * sw + x0) * 4; const a = sd[i + 3], af = a / 255; r01 = sd[i] * af; g01 = sd[i + 1] * af; b01 = sd[i + 2] * af; a01 = a; }
+      if (y1ok && x1ok) { const i = (y1 * sw + x1) * 4; const a = sd[i + 3], af = a / 255; r11 = sd[i] * af; g11 = sd[i + 1] * af; b11 = sd[i + 2] * af; a11 = a; }
+      // バイリニア（top/bot）。
+      const aTop = a00 + (a10 - a00) * fx;
+      const aBot = a01 + (a11 - a01) * fx;
+      const pa = aTop + (aBot - aTop) * fy;
       const di = (uy * nW + ux) * 4;
-      od[di] = Math.round(r);
-      od[di + 1] = Math.round(g);
-      od[di + 2] = Math.round(b);
-      od[di + 3] = Math.round(a);
+      if (pa <= 0) {
+        od[di] = 0; od[di + 1] = 0; od[di + 2] = 0; od[di + 3] = 0;
+        continue;
+      }
+      const rTop = r00 + (r10 - r00) * fx, rBot = r01 + (r11 - r01) * fx;
+      const gTop = g00 + (g10 - g00) * fx, gBot = g01 + (g11 - g01) * fx;
+      const bTop = b00 + (b10 - b00) * fx, bBot = b01 + (b11 - b01) * fx;
+      const af = pa / 255;
+      od[di] = Math.round((rTop + (rBot - rTop) * fy) / af);
+      od[di + 1] = Math.round((gTop + (gBot - gTop) * fy) / af);
+      od[di + 2] = Math.round((bTop + (bBot - bTop) * fy) / af);
+      od[di + 3] = Math.round(pa);
     }
   }
   return { ...layer, buffer: out, offsetX: nMinX, offsetY: nMinY };

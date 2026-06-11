@@ -35,12 +35,16 @@ export const RevGView = memo(function RevGView({
   session,
   dag,
   version,
+  active,
   selectedNodeId,
   onSelectNode,
 }: {
   session: EditorSession;
   dag: Dag;
   version: number;
+  // 展開中か。false の間も常時マウントしてサムネイルキャッシュを温存するが、
+  // 重いグラフ集約(buildRevG)・レイアウト・SVG 描画は active のときだけ行う。
+  active: boolean;
   selectedNodeId: string | null;
   onSelectNode: (id: string | null) => void;
 }) {
@@ -115,15 +119,19 @@ export const RevGView = memo(function RevGView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, session]);
 
+  // 集約・レイアウトは展開中のみ計算する（折りたたみ中はサムネイル温存だけでよい）。
   const revg = useMemo(
-    () => buildRevG(dag, flatSmall, resolution),
-    [dag, flatSmall, resolution],
+    () => (active ? buildRevG(dag, flatSmall, resolution) : null),
+    [active, dag, flatSmall, resolution],
   );
 
   const layout = useMemo(
-    () => layoutNodes(revg.clusters.values(), { nodeWidth: NODE_W, nodeHeight: NODE_H }),
+    () => (revg ? layoutNodes(revg.clusters.values(), { nodeWidth: NODE_W, nodeHeight: NODE_H }) : null),
     [revg],
   );
+
+  // 折りたたみ中は何も描画しない（マウントは維持され、上のサムネイル useMemo は走り続ける）。
+  if (!active || !revg || !layout) return null;
 
   const svgW = Math.max(layout.width + PAD * 2, 220);
   const svgH = Math.max(layout.height + PAD * 2, 120);

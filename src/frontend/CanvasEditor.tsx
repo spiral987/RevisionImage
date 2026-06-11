@@ -191,6 +191,9 @@ export function CanvasEditor({
   // 同一ストリークが続く限り元バッファから1回だけ再サンプルし直すことで、回転の反復による
   // バッファ肥大・再サンプル累積（解像度低下）を防ぐ。
   const xformStreakRef = useRef<{ opId: string; cumulative: TransformParams } | null>(null);
+  // ストリーク開始時（最初の変形 op を適用する直前）の状態。継続ジェスチャは全ログ replay せず
+  // applyOperation(baseState, op) で元バッファから1回だけ再サンプルし直す（確定の重さ対策）。
+  const xformBaseStateRef = useRef<EditorState | null>(null);
   const selectRef = useRef<{ startX: number; startY: number } | null>(null);
   const shapeRef = useRef<{ startX: number; startY: number } | null>(null);
 
@@ -313,6 +316,7 @@ export function CanvasEditor({
   // ツール／アクティブレイヤーが変わったら変形ストリークを終了（別対象への統合を防ぐ）。
   useEffect(() => {
     xformStreakRef.current = null;
+    xformBaseStateRef.current = null;
   }, [tool, activeLayerId]);
 
   // checkout 等でアクティブレイヤが存在しなくなったら現在状態の active に合わせる。
@@ -888,6 +892,7 @@ export function CanvasEditor({
           });
           // 移動は非破壊（translate）。変形ストリークは切る（次の回転は移動後から1回再サンプル）。
           xformStreakRef.current = null;
+          xformBaseStateRef.current = null;
           session.apply(createTranslateOp(activeLayerId, dx, dy, width, height, region));
           onEdit();
         }
@@ -997,30 +1002,29 @@ export function CanvasEditor({
   const applyTransformMatrix = (m: TransformParams, layer: Layer) => {
     session.apply(createTransformOp(activeLayerId, m, width, height, transformedRegion(layer, m)));
     xformStreakRef.current = null;
+    xformBaseStateRef.current = null;
     onEdit();
     repaint();
   };
 
   // Transform ツールのジェスチャ確定。m は「現在の表示内容 → 変形後」のキャンバス座標アフィン。
-  // 直前の確定が同一ストリークの変形なら、行列を合成して元バッファから1回だけ再サンプルし直す
-  // （undo で直前の累積変形を外し、合成行列を再適用）。これによりバッファ肥大も再サンプル累積も起きない。
+  // 直前の確定が同一ストリークの変形なら、行列を合成して「ストリーク開始時の状態」から
+  // 1回だけ再サンプルし直し、末尾 op を置き換える（amendLast）。全ログ replay を避けるため軽い。
+  // これによりバッファ肥大も再サンプル累積（解像度低下）も起きない。
   const commitXformGesture = (m: TransformParams) => {
     const log = session.getLog();
     const last = log[log.length - 1];
     const streak = xformStreakRef.current;
+    const baseState = xformBaseStateRef.current;
+    const baseLayer = baseState ? getLayer(baseState, activeLayerId) : undefined;
     const continues =
-      !!streak && !!last && last.id === streak.opId && last.type === 'transform' && last.layerId === activeLayerId;
+      !!streak && !!last && last.id === streak.opId && last.type === 'transform' &&
+      last.layerId === activeLayerId && !!baseState && !!baseLayer;
     if (continues) {
       const cumulative = composeMatrix(m, streak!.cumulative);
-      session.undo(); // 直前の累積変形を取り消し、元バッファへ戻す
-      const base = getActiveLayer();
-      if (!base) {
-        xformStreakRef.current = null;
-        repaint();
-        return;
-      }
-      const op = createTransformOp(activeLayerId, cumulative, width, height, transformedRegion(base, cumulative));
-      session.apply(op);
+      const op = createTransformOp(activeLayerId, cumulative, width, height, transformedRegion(baseLayer!, cumulative));
+      const newState = applyOperation(baseState!, op); // 元バッファから1回だけ再サンプル（replay 不要）
+      session.amendLast(op, newState);
       xformStreakRef.current = { opId: op.id, cumulative };
     } else {
       const base = getActiveLayer();
@@ -1028,6 +1032,7 @@ export function CanvasEditor({
         repaint();
         return;
       }
+      xformBaseStateRef.current = session.state; // ストリーク開始時の状態を控える（構造共有で軽量）
       const op = createTransformOp(activeLayerId, m, width, height, transformedRegion(base, m));
       session.apply(op);
       xformStreakRef.current = { opId: op.id, cumulative: m };

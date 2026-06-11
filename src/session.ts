@@ -53,6 +53,22 @@ export class EditorSession {
     if (this.undoStack.length > EditorSession.MAX_UNDO) this.undoStack.shift();
   }
 
+  /**
+   * 直前に apply した操作を newOp で置き換え、状態を newState へ直接差し替える。
+   * 変形ツールが連続ジェスチャを1操作へ統合する際、全ログ replay を避けて元バッファから
+   * 1回だけ再サンプルし直すための軽量経路。
+   * 呼び出し側は newState === replay(置換後ログ) を保証すること
+   * （applyOperation(ストリーク開始時state, newOp) で計算すれば自動的に満たされる）。
+   * undoStack は据え置き（1 ストリーク = 1 undo を保つ）。redoStack は apply 同様クリアする。
+   */
+  amendLast(newOp: Operation, newState: EditorState): void {
+    const log = this.logger.getLog();
+    if (log.length === 0) return;
+    this.logger.setLog([...log.slice(0, -1), newOp]);
+    this.redoStack = [];
+    this.state = newState;
+  }
+
   /** ログを ops で置き換え、state を決定的に再構築する（checkout/undo/redo の共通処理）。 */
   private restore(ops: readonly Operation[]): void {
     this.logger.setLog(ops);
