@@ -4,8 +4,17 @@ import { createInitialState } from './engine/editorState';
 import './engine/operations'; // 操作ハンドラを登録
 import { Logger } from './backend/logger';
 import { buildDag } from './backend/dagBuilder';
-import { computeHeads, type CommittedRevision } from './backend/revision';
+import { buildUnifiedDag, computeHeads, type CommittedRevision } from './backend/revision';
 import { genId } from './util/id';
+
+/**
+ * Undo/Redo の履歴エントリ。log は常に保持し、state は直近のみ参照を保持する
+ * （state が null のエントリは log から replay で復元する。メモリと速度のトレードオフ）。
+ */
+interface HistoryEntry {
+  log: Operation[];
+  state: EditorState | null;
+}
 
 /**
  * Engine（純粋な applyOperation）と Backend（Logger）を束ねる編集セッション。
@@ -24,15 +33,19 @@ export class EditorSession {
   height: number;
 
   /**
-   * Undo/Redo はログ全体のスナップショット列で管理する。
-   * 各 apply の「直前」のログを undoStack に積む（1 ジェスチャ = 1 スナップショット）。
-   * consolidate で複数ブラシが 1 エントリに統合されても、apply 単位でスナップショットを
-   * 取るため Undo は 1 ジェスチャずつ戻る。スナップショットは（不変な）op 参照の配列コピー
-   * なので軽量。state は常に restore で log から決定的に再構築し、不変条件を保つ。
+   * Undo/Redo はジェスチャ単位の {ログ, 状態} スナップショット列で管理する。
+   * 各 apply の「直前」の状態を積む（1 ジェスチャ = 1 スナップショット）。consolidate で
+   * 複数ブラシが 1 エントリに統合されても apply 単位で積むため Undo は 1 ジェスチャずつ戻る。
+   *
+   * state は不変（applyOperation は純関数）なので参照を持つだけで O(1) 復元できる。ただし
+   * レイヤバッファを抱えてメモリを食うので、直近 MAX_CACHED_STATES 件だけ state を保持し、
+   * 古いエントリは log だけ残して（必要時に）replay で復元する。これで通常の Undo は即時、
+   * 深い Undo のみ replay フォールバックになる（旧実装は毎回全ログ replay で、変形を含むと激重だった）。
    */
-  private undoStack: Operation[][] = [];
-  private redoStack: Operation[][] = [];
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
   private static readonly MAX_UNDO = 200;
+  private static readonly MAX_CACHED_STATES = 24;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -41,16 +54,34 @@ export class EditorSession {
   }
 
   apply(op: Operation): EditorState {
-    this.pushUndoSnapshot();
+    this.pushSnapshot(this.undoStack);
     this.redoStack = [];
     this.state = applyOperation(this.state, op);
     this.logger.append(op);
     return this.state;
   }
 
-  private pushUndoSnapshot(): void {
-    this.undoStack.push([...this.logger.getLog()]);
-    if (this.undoStack.length > EditorSession.MAX_UNDO) this.undoStack.shift();
+  /**
+   * 現在の {ログ, 状態} を stack に積む。直近 MAX_CACHED_STATES 件を超えた古いエントリの
+   * 状態参照は捨ててバッファ保持を抑える（log は残すので replay で復元可能）。
+   */
+  private pushSnapshot(stack: HistoryEntry[]): void {
+    stack.push({ log: [...this.logger.getLog()], state: this.state });
+    const evict = stack.length - 1 - EditorSession.MAX_CACHED_STATES;
+    if (evict >= 0 && stack[evict].state) stack[evict].state = null;
+    if (stack.length > EditorSession.MAX_UNDO) stack.shift();
+  }
+
+  /** スナップショットへ復元する。state があれば O(1)、無ければ log から replay。 */
+  private applySnapshot(entry: HistoryEntry): void {
+    this.logger.setLog(entry.log);
+    if (entry.state) {
+      this.state = entry.state;
+    } else {
+      let s = createInitialState(this.width, this.height);
+      for (const op of entry.log) s = applyOperation(s, op);
+      this.state = s;
+    }
   }
 
   /**
@@ -69,7 +100,7 @@ export class EditorSession {
     this.state = newState;
   }
 
-  /** ログを ops で置き換え、state を決定的に再構築する（checkout/undo/redo の共通処理）。 */
+  /** ログを ops で置き換え、state を決定的に再構築する（checkout/resize/loadProject 用）。 */
   private restore(ops: readonly Operation[]): void {
     this.logger.setLog(ops);
     let s = createInitialState(this.width, this.height);
@@ -89,8 +120,8 @@ export class EditorSession {
   undo(): boolean {
     const prev = this.undoStack.pop();
     if (!prev) return false;
-    this.redoStack.push([...this.logger.getLog()]);
-    this.restore(prev);
+    this.pushSnapshot(this.redoStack); // 現在状態を redo 用に退避
+    this.applySnapshot(prev);
     return true;
   }
 
@@ -98,8 +129,8 @@ export class EditorSession {
   redo(): boolean {
     const next = this.redoStack.pop();
     if (!next) return false;
-    this.undoStack.push([...this.logger.getLog()]);
-    this.restore(next);
+    this.pushSnapshot(this.undoStack); // 現在状態を undo 用に退避
+    this.applySnapshot(next);
     return true;
   }
 
@@ -110,6 +141,16 @@ export class EditorSession {
   /** 現在のログから DAG（Algorithm 1）を構築する。RevG 可視化(Phase 4)の入力。 */
   getDag(): Dag {
     return buildDag(this.getLog(), this.width, this.height);
+  }
+
+  /**
+   * 全確定リビジョン + 現在の作業ログを重ね合わせた「統合DAG」を構築する（統合 RevG 用）。
+   * リビジョン間の分岐・マージ構造を1つのグラフに表す。共有プレフィックスは畳まれ、
+   * 各リビジョンの head が同グラフ上のコミット点になる。
+   */
+  getUnifiedDag(): Dag {
+    const branches = [...this.revisions, { ops: this.getLog() }];
+    return buildUnifiedDag(branches, this.width, this.height);
   }
 
   /** 現在の操作列をリビジョンとして確定（commit / check-in）する。 */

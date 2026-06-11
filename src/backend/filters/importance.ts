@@ -97,11 +97,15 @@ export function computeImportance(dag: Dag, flatById: Map<string, ImageBuffer>):
  * resolution=1 で DAG そのまま（全ノード）、小さくするほど重要度の高いノードだけを
  * アンカーとして残し、他はそのアンカー（祖先方向で最初に出会うアンカー）へ吸収する。
  * 集約後にクラスタ間でエッジを張り直す。スライダーでノード数が連続的に増減する。
+ *
+ * forcedAnchors: 解像度に関わらず常にアンカーとして残すノード id（統合 RevG で
+ * リビジョンの head=コミット点を常時可視にするために使う。原論文の「coarse=リビジョン解像度」）。
  */
 export function buildRevG(
   dag: Dag,
   flatById: Map<string, ImageBuffer>,
   resolution: number,
+  forcedAnchors?: ReadonlySet<string>,
 ): RevGGraph {
   const root = dag.rootId;
   const imp = computeImportance(dag, flatById);
@@ -113,6 +117,7 @@ export function buildRevG(
   const sorted = [...nonRoot].sort((a, b) => (imp.get(b.id) ?? 0) - (imp.get(a.id) ?? 0));
   for (let i = 0; i < keep && i < sorted.length; i++) anchors.add(sorted[i].id);
   if (resolution >= 1) for (const n of nonRoot) anchors.add(n.id);
+  if (forcedAnchors) for (const id of forcedAnchors) if (id !== root && dag.nodes.has(id)) anchors.add(id);
 
   // 各ノードを所属アンカーへ割り当て（BFS順=親が先に確定）。
   const clusterOf = new Map<string, string>();

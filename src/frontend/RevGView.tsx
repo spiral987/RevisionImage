@@ -1,6 +1,8 @@
-import { memo, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Dag, ImageBuffer, Operation } from '../types';
 import type { EditorSession } from '../session';
+import type { CommittedRevision } from '../backend/revision';
 import { Replayer } from '../backend/replayer';
 import { flattenState } from '../engine/composite';
 import { createInitialState } from '../engine/editorState';
@@ -18,6 +20,8 @@ const NODE_H = THUMB_H + 22;
 const PAD = 16;
 const IMP_W = 64; // importance 計算用の縮小サイズ
 const IMP_H = 48;
+const MENU_W = 215; // 右クリックメニューの想定サイズ（画面端クランプ用）
+const MENU_H = 150;
 
 function labelOf(op: Operation, memberCount: number): string {
   const p = op.params as Record<string, unknown>;
@@ -34,19 +38,30 @@ function labelOf(op: Operation, memberCount: number): string {
 export const RevGView = memo(function RevGView({
   session,
   dag,
+  revisions,
   version,
   active,
   selectedNodeId,
   onSelectNode,
+  onCheckoutRevision,
+  onCompareRevisions,
+  onMergeRevisions,
 }: {
   session: EditorSession;
+  // 統合DAG（全リビジョン + 作業ログを重ねたもの）。
   dag: Dag;
+  // 確定リビジョン群。head=コミット点をグラフ上にタグ表示し、強制アンカーにする。
+  revisions: CommittedRevision[];
   version: number;
   // 展開中か。false の間も常時マウントしてサムネイルキャッシュを温存するが、
   // 重いグラフ集約(buildRevG)・レイアウト・SVG 描画は active のときだけ行う。
   active: boolean;
   selectedNodeId: string | null;
   onSelectNode: (id: string | null) => void;
+  // コミットノードの右クリックメニューから発行する操作（原論文 Figure 2 の右クリックメニュー相当）。
+  onCheckoutRevision: (rev: CommittedRevision) => void;
+  onCompareRevisions: (a: CommittedRevision, b: CommittedRevision) => void;
+  onMergeRevisions: (trunk: CommittedRevision, branch: CommittedRevision) => void;
 }) {
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
@@ -59,7 +74,6 @@ export const RevGView = memo(function RevGView({
   const sizeKeyRef = useRef('');
 
   const { thumbs, flatSmall } = useMemo(() => {
-    const t0 = performance.now();
     const cache = cacheRef.current;
     const sizeKey = `${session.width}x${session.height}`;
     if (sizeKeyRef.current !== sizeKey) {
@@ -79,6 +93,7 @@ export const RevGView = memo(function RevGView({
       gen(ROOT_ID, null, flattenState(createInitialState(session.width, session.height)));
     }
 
+    // 1) 作業ログ: ライブ状態からの高速パスを保つ（描画直後の固着対策）。
     const missing = log.filter((op) => {
       const c = cache.get(op.id);
       return !c || c.op !== op;
@@ -98,35 +113,119 @@ export const RevGView = memo(function RevGView({
       }
     }
 
-    // 現在のノード集合（ROOT + log）以外のキャッシュを掃除する。
+    // 2) 確定リビジョン: まだキャッシュに無い id（=分岐した固有ノード）だけ生成する。
+    // 共有プレフィックスは作業ログのパスで生成済み。リビジョン op は凍結なので id 有無で判定でき、
+    // 作業ログ側の参照を上書きしない（同一 id のサムネイルは同一プレフィックス＝同一画像）。
+    for (const rev of revisions) {
+      if (rev.ops.some((op) => !cache.has(op.id))) {
+        const states = new Replayer(session.width, session.height).replayAll(rev.ops);
+        rev.ops.forEach((op, i) => {
+          if (!cache.has(op.id)) gen(op.id, op, flattenState(states[i + 1]));
+        });
+      }
+    }
+
+    // 現在のノード集合（ROOT + 作業ログ + 全リビジョンの op = 統合DAGのノード）以外を掃除。
     const live = new Set<string>([ROOT_ID, ...log.map((o) => o.id)]);
+    for (const rev of revisions) for (const op of rev.ops) live.add(op.id);
     for (const id of [...cache.keys()]) if (!live.has(id)) cache.delete(id);
 
     const thumbsMap = new Map<string, string>();
     const smallMap = new Map<string, ImageBuffer>();
     for (const id of live) {
-      const c = cache.get(id)!;
-      thumbsMap.set(id, c.thumb);
-      smallMap.set(id, c.small);
-    }
-    // 診断: サムネイル生成が重い時だけ出力（通常は無音。不要になったら削除可）。
-    const dt = performance.now() - t0;
-    if (dt > 8) {
-      // eslint-disable-next-line no-console
-      console.info(`[perf] RevG thumbs ${dt.toFixed(1)}ms (nodes=${live.size}, regen=${missing.length})`);
+      const c = cache.get(id);
+      if (c) {
+        thumbsMap.set(id, c.thumb);
+        smallMap.set(id, c.small);
+      }
     }
     return { thumbs: thumbsMap, flatSmall: smallMap };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, session]);
+  }, [version, revisions, session]);
+
+  // 各リビジョンの head = コミット点。解像度を下げても常にアンカーとして残す。
+  const forcedAnchors = useMemo(() => {
+    const s = new Set<string>();
+    for (const rev of revisions) for (const h of rev.headIds) s.add(h);
+    return s;
+  }, [revisions]);
+
+  // ノード id → そこに head を持つリビジョンのラベル群（コミットタグ表示用）。
+  // head は強制アンカーなので、必ず自分自身が代表のクラスタになる（クラスタ id == head id）。
+  const revTagByNode = useMemo(() => {
+    const m = new Map<string, string[]>();
+    revisions.forEach((rev, i) => {
+      const tag = `#${i} ${rev.label}`;
+      for (const h of rev.headIds) m.set(h, [...(m.get(h) ?? []), tag]);
+    });
+    return m;
+  }, [revisions]);
+
+  // ノード id（=コミット点 head）→ リビジョン。同一 head を持つ複数リビジョンは最新を採用。
+  const revByHead = useMemo(() => {
+    const m = new Map<string, CommittedRevision>();
+    for (const rev of revisions) for (const h of rev.headIds) m.set(h, rev);
+    return m;
+  }, [revisions]);
+
+  // 右クリックメニュー（コミットノード上）と、diff/merge の「2つ目を選択」待ち状態。
+  const [menu, setMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [pending, setPending] = useState<{ action: 'compare' | 'merge'; from: CommittedRevision } | null>(
+    null,
+  );
+  // メニューは portal で body 直下に出すため、外側クリック判定は実DOMの contains で行う。
+  const menuElRef = useRef<HTMLDivElement>(null);
+
+  // Esc で取消、メニュー外クリックでメニューを閉じる。
+  useEffect(() => {
+    if (!menu && !pending) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMenu(null);
+        setPending(null);
+      }
+    };
+    const onDocClick = (e: MouseEvent) => {
+      if (menuElRef.current?.contains(e.target as Node)) return; // メニュー内クリックは閉じない
+      setMenu(null);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onDocClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onDocClick);
+    };
+  }, [menu, pending]);
+
+  // ノードのクリック: 2つ目待ちならその相手として確定、そうでなければ選択トグル。
+  const onNodeClick = (nodeId: string) => {
+    setMenu(null);
+    if (pending) {
+      const rev = revByHead.get(nodeId);
+      if (rev && rev.id !== pending.from.id) {
+        if (pending.action === 'compare') onCompareRevisions(pending.from, rev);
+        else onMergeRevisions(pending.from, rev);
+      }
+      setPending(null); // 相手が非コミット/同一でもピックは終了（キャンセル）
+      return;
+    }
+    onSelectNode(nodeId === selectedNodeId ? null : nodeId);
+  };
+
+  const indexOfRev = (rev: CommittedRevision) => revisions.findIndex((r) => r.id === rev.id);
+  const menuRev = menu ? revByHead.get(menu.nodeId) : null;
 
   // 集約・レイアウトは展開中のみ計算する（折りたたみ中はサムネイル温存だけでよい）。
   const revg = useMemo(
-    () => (active ? buildRevG(dag, flatSmall, resolution) : null),
-    [active, dag, flatSmall, resolution],
+    () => (active ? buildRevG(dag, flatSmall, resolution, forcedAnchors) : null),
+    [active, dag, flatSmall, resolution, forcedAnchors],
   );
 
   const layout = useMemo(
-    () => (revg ? layoutNodes(revg.clusters.values(), { nodeWidth: NODE_W, nodeHeight: NODE_H }) : null),
+    () =>
+      revg
+        ? layoutNodes(revg.clusters.values(), { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 58 })
+        : null,
     [revg],
   );
 
@@ -154,6 +253,17 @@ export const RevGView = memo(function RevGView({
         </span>
       </div>
 
+      {pending && (
+        <div className="revg-pending">
+          {pending.action === 'compare' ? '比較' : 'マージ'}する2つ目のコミットを選択（基準:{' '}
+          <b>
+            #{indexOfRev(pending.from)} {pending.from.label}
+          </b>
+          ）
+          <button onClick={() => setPending(null)}>取消</button>
+        </div>
+      )}
+
       <div className="revg-scroll">
         <svg className="revg-svg" width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
           <g transform={`translate(${PAD},${PAD})`}>
@@ -175,12 +285,28 @@ export const RevGView = memo(function RevGView({
               const selected = cluster.id === selectedNodeId;
               const thumb = thumbs.get(cluster.id);
               const aggregated = cluster.memberIds.length > 1;
+              const revTags = revTagByNode.get(cluster.id);
+              const tagText = revTags?.join(' / ') ?? '';
+              const tagW = Math.max(30, tagText.length * 5.6 + 12);
               return (
                 <g
                   key={cluster.id}
                   transform={`translate(${x},${y})`}
-                  className={`revg-node ${selected ? 'selected' : ''}`}
-                  onClick={() => onSelectNode(selected ? null : cluster.id)}
+                  className={`revg-node ${selected ? 'selected' : ''} ${revTags ? 'commit' : ''} ${
+                    pending && revTags ? 'pickable' : ''
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNodeClick(cluster.id);
+                  }}
+                  onContextMenu={(e) => {
+                    if (revByHead.has(cluster.id)) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setPending(null);
+                      setMenu({ x: e.clientX, y: e.clientY, nodeId: cluster.id });
+                    }
+                  }}
                 >
                   {aggregated && (
                     <rect
@@ -190,6 +316,20 @@ export const RevGView = memo(function RevGView({
                       rx={6}
                       transform="translate(4,4)"
                       style={{ stroke: color }}
+                    />
+                  )}
+                  {/* コミット点（リビジョン head）は金色のリングで強調する。 */}
+                  {revTags && (
+                    <rect
+                      x={-3}
+                      y={-3}
+                      width={nl.width + 6}
+                      height={nl.height + 6}
+                      rx={8}
+                      fill="none"
+                      stroke="#f2c94c"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 2"
                     />
                   )}
                   <rect
@@ -212,12 +352,70 @@ export const RevGView = memo(function RevGView({
                   <text x={nl.width / 2} y={nl.height - 6} textAnchor="middle" className="revg-label">
                     {labelOf(cluster.op, cluster.memberIds.length)}
                   </text>
+                  {/* コミットタグ: このノードに head を持つリビジョンのラベル。 */}
+                  {revTags && (
+                    <g transform={`translate(${nl.width / 2}, -11)`}>
+                      <rect x={-tagW / 2} y={-8} width={tagW} height={15} rx={7} fill="#f2c94c" />
+                      <text x={0} y={3} textAnchor="middle" className="revg-commit-tag">
+                        {tagText}
+                      </text>
+                    </g>
+                  )}
                 </g>
               );
             })}
           </g>
         </svg>
       </div>
+
+      {menu &&
+        menuRev &&
+        // portal で body 直下に描画する。.float-window は backdrop-filter を持つため、その内側だと
+        // position:fixed でも包含ブロックがウインドウになり overflow:hidden で切り取られてしまう。
+        // さらに画面端で切れないようビューポート内にクランプする。
+        createPortal(
+          <div
+            ref={menuElRef}
+            className="revg-menu"
+            style={{
+              position: 'fixed',
+              left: Math.max(8, Math.min(menu.x, window.innerWidth - MENU_W - 8)),
+              top: Math.max(8, Math.min(menu.y, window.innerHeight - MENU_H - 8)),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="revg-menu-head">
+              #{indexOfRev(menuRev)} {menuRev.label}
+            </div>
+            <button
+              onClick={() => {
+                onCheckoutRevision(menuRev);
+                setMenu(null);
+              }}
+            >
+              Checkout（このリビジョンへ分岐）
+            </button>
+            <button
+              disabled={revisions.length < 2}
+              onClick={() => {
+                setPending({ action: 'compare', from: menuRev });
+                setMenu(null);
+              }}
+            >
+              Compare with…（2つ目を選択）
+            </button>
+            <button
+              disabled={revisions.length < 2}
+              onClick={() => {
+                setPending({ action: 'merge', from: menuRev });
+                setMenu(null);
+              }}
+            >
+              Merge with…（これを trunk に）
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 });

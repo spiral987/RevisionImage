@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 
 /**
@@ -54,6 +54,30 @@ export function FloatWindow({
 
   const [pos, setPos] = useState<{ left: number; top: number } | null>(() => loadLS(`floatpos:${id}`, 'left', 'top'));
   const [size, setSize] = useState<{ w: number; h: number } | null>(() => loadLS(`floatsize:${id}`, 'w', 'h'));
+
+  // 保存済みの位置・サイズが現在のビューポート外に出ないようにクランプする。
+  // マウント時（前回より小さい画面で開いた場合）とブラウザのリサイズ時に実行。
+  // これがないと、ウインドウを縮小したときにタイトルバー（=タブ）が画面外へ出て見えなくなる。
+  // ドラッグ/リサイズ中のクランプ（onMove / onResizeMove）と同じ余白（横80px・縦28px が残るように）。
+  useEffect(() => {
+    const clamp = () => {
+      setSize((s) => {
+        if (!s) return s;
+        const w = Math.max(180, Math.min(window.innerWidth - 16, s.w));
+        const h = Math.max(120, Math.min(window.innerHeight - 16, s.h));
+        return w === s.w && h === s.h ? s : { w, h };
+      });
+      setPos((p) => {
+        if (!p) return p; // 既定位置（アンカー）のままなら CSS 側で常に画面内
+        const left = Math.max(0, Math.min(window.innerWidth - 80, p.left));
+        const top = Math.max(0, Math.min(window.innerHeight - 28, p.top));
+        return left === p.left && top === p.top ? p : { left, top };
+      });
+    };
+    clamp();
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
+  }, []);
 
   // ---- 移動（タイトルバー） ----
   const onDown = (e: ReactPointerEvent) => {

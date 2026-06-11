@@ -174,10 +174,18 @@ export function App() {
   const deferredVersion = useDeferredValue(version);
   const dag = useMemo(() => session.getDag(), [deferredVersion, session]);
 
+  // 統合DAG: 全リビジョン + 作業ログを重ね、分岐/マージを1グラフに表す（統合 RevG の入力）。
+  // revisions の変化（commit/checkout/merge）でも再構築する。
+  const unifiedDag = useMemo(
+    () => session.getUnifiedDag(),
+    [deferredVersion, revisions, session],
+  );
+
+  // RevG ノードのクリックで領域をハイライトする。統合DAGのノード（分岐側の固有ノードを含む）から引く。
   const selectedRegion = useMemo<BBox | null>(() => {
     if (!selectedNodeId || selectedNodeId === ROOT_ID) return null;
-    return dag.nodes.get(selectedNodeId)?.op.region ?? null;
-  }, [selectedNodeId, dag]);
+    return unifiedDag.nodes.get(selectedNodeId)?.op.region ?? null;
+  }, [selectedNodeId, unifiedDag]);
 
   const onCanvasRegionSelect = (bbox: BBox) => {
     const log = session.getLog();
@@ -377,17 +385,28 @@ export function App() {
           </div>
           <div className="fsec-body" style={{ display: revgOpen ? undefined : 'none' }}>
             <p className="hint">
-              ノードクリックで対応領域をハイライト。枠色は操作クラス（brush=赤 / color=青 / rigid=緑 /
-              deform=黄 / edit=紫）。
+              全リビジョン + 作業中の状態を1つのグラフに統合表示。金色の破線枠＋ラベルが各コミット点
+              （リビジョンの head）。分岐したコミットは枝、マージは合流として現れます。ノードクリックで
+              対応領域をハイライト。枠色は操作クラス（brush=赤 / color=青 / rigid=緑 / deform=黄 / edit=紫）。
             </p>
           </div>
           <RevGView
             session={session}
-            dag={dag}
+            dag={unifiedDag}
+            revisions={revisions}
             version={deferredVersion}
             active={revgOpen}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
+            onCheckoutRevision={(rev) => checkout(rev)}
+            onCompareRevisions={(a, b) => {
+              setSelectedRevIds([a.id, b.id]);
+              setDiffPair([a, b]);
+            }}
+            onMergeRevisions={(a, b) => {
+              setSelectedRevIds([a.id, b.id]);
+              setMergePair([a, b]);
+            }}
           />
         </section>
       </FloatWindow>
