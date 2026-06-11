@@ -1,7 +1,15 @@
-import type { StrokePoint } from '../src/types';
+import type { EditorState, Layer, LayerNode, StrokePoint } from '../src/types';
 
 // statesEqual はエンジン本体に置き（UI の verify でも使うため）、テストはそれを共有する。
 export { statesEqual } from '../src/engine/compare';
+
+/**
+ * テスト用: レイヤーツリーのノードをリーフ(Layer)として扱う。テストはグループを作らない
+ * 前提なので、型の絞り込み（LayerNode → Layer）のためのキャスト。
+ */
+export const asLayer = (n: LayerNode): Layer => n as Layer;
+/** 最上位 i 番目のノードをリーフとして取得。 */
+export const leafAt = (state: EditorState, i = 0): Layer => state.layers[i] as Layer;
 
 /** 直線状の点列を生成するテスト用ヘルパ。 */
 export function line(

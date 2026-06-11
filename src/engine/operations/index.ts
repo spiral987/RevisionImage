@@ -14,8 +14,14 @@ import {
   renameLayerHandler,
   removeLayerHandler,
   reorderLayerHandler,
+  clearLayerHandler,
+  mergeDownLayerHandler,
+  moveNodeHandler,
+  addGroupHandler,
+  setGroupCollapsedHandler,
 } from './layerOps';
 import { fillHandler } from './fill';
+import { transformHandler } from './transform';
 
 registerOp(brushHandler);
 registerOp(eraserHandler);
@@ -29,7 +35,13 @@ registerOp(setLayerOpacityHandler);
 registerOp(renameLayerHandler);
 registerOp(removeLayerHandler);
 registerOp(reorderLayerHandler);
+registerOp(clearLayerHandler);
+registerOp(mergeDownLayerHandler);
+registerOp(moveNodeHandler);
+registerOp(addGroupHandler);
+registerOp(setGroupCollapsedHandler);
 registerOp(fillHandler);
+registerOp(transformHandler);
 
 export { brushHandler, createBrushOp, type BrushParams } from './brush';
 export { eraserHandler, createEraserOp, type EraserParams } from './eraser';
@@ -48,10 +60,21 @@ export {
   createRenameLayerOp,
   createRemoveLayerOp,
   createReorderLayerOp,
+  createClearLayerOp,
+  createMergeDownLayerOp,
+  createMoveNodeOp,
+  createAddGroupOp,
+  createSetGroupCollapsedOp,
   type SetLayerVisibilityParams,
   type SetLayerOpacityParams,
   type RenameLayerParams,
   type RemoveLayerParams,
   type ReorderLayerParams,
+  type ClearLayerParams,
+  type MergeDownLayerParams,
+  type MoveNodeParams,
+  type AddGroupParams,
+  type SetGroupCollapsedParams,
 } from './layerOps';
 export { fillHandler, createFillOp, fillRegion, type FillParams } from './fill';
+export { transformHandler, createTransformOp, type TransformParams } from './transform';

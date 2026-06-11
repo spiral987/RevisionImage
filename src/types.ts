@@ -86,10 +86,27 @@ export interface Layer {
   opacity: number; // 0..1
 }
 
+/**
+ * レイヤーフォルダ（グループ）。子ノード（レイヤー or さらにグループ）を束ねる。
+ * 合成時は children を独立バッファに合成してから group の opacity/visible を適用する。
+ * buffer を持たない点で Layer と区別される（型ガード isGroup は 'children' の有無で判定）。
+ */
+export interface LayerGroup {
+  id: string;
+  name: string;
+  visible: boolean;
+  opacity: number; // 0..1
+  collapsed: boolean; // UI 表示の折りたたみ（描画には影響しない）
+  children: LayerNode[];
+}
+
+/** レイヤーツリーのノード = リーフ(Layer) または フォルダ(LayerGroup)。 */
+export type LayerNode = Layer | LayerGroup;
+
 /** エディタの完全な状態。replay により log から決定的に再構築できる。 */
 export interface EditorState {
   width: number;
   height: number;
-  layers: Layer[]; // 下から上（layers[0] が最背面）
+  layers: LayerNode[]; // 下から上（layers[0] が最背面）。フォルダで階層化される。
   activeLayerId: string;
 }

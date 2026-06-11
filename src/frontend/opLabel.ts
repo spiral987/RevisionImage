@@ -28,8 +28,25 @@ export function describeOp(op: Operation): string {
       return 'remove';
     case 'reorderLayer':
       return `→ index ${p.toIndex}`;
+    case 'clearLayer':
+      return 'clear';
+    case 'mergeDownLayer':
+      return 'merge down';
+    case 'addGroup':
+      return p.wrapLayerId ? `folder "${p.name}" (wrap)` : `folder "${p.name}"`;
+    case 'moveNode':
+      return p.parentId ? `→ into ${p.parentId}` : '→ top';
+    case 'setGroupCollapsed':
+      return p.collapsed ? 'collapse' : 'expand';
     case 'fill':
       return `rgb(${(p.color as number[]).join(',')}) tol${p.tolerance}`;
+    case 'transform': {
+      const a = p.a as number;
+      const b = p.b as number;
+      const sx = Math.hypot(a, b);
+      const deg = Math.round((Math.atan2(b, a) * 180) / Math.PI);
+      return `${sx.toFixed(2)}× ${deg}°`;
+    }
     default:
       return JSON.stringify(p);
   }

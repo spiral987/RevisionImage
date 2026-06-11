@@ -6,7 +6,7 @@ import { flattenState } from '../src/engine/composite';
 import { buffersEqual } from '../src/engine/imageBuffer';
 import { Replayer } from '../src/backend/replayer';
 import { createBrushOp, createTranslateOp, brushHandler } from '../src/engine/operations';
-import { statesEqual, line } from './helpers';
+import { statesEqual, line, leafAt } from './helpers';
 
 const W = 40;
 const H = 40;
@@ -17,15 +17,15 @@ describe('非破壊レイヤ移動 + バッファ拡張', () => {
     let s = createInitialState(W, H);
     // レイヤを右に 30px 移動（非破壊・オフセットのみ）
     s = applyOperation(s, createTranslateOp(BASE_LAYER_ID, 30, 0, W, H));
-    expect(s.layers[0].offsetX).toBe(30);
-    expect(s.layers[0].buffer.width).toBe(W); // まだ拡張されていない
+    expect(leafAt(s, 0).offsetX).toBe(30);
+    expect(leafAt(s, 0).buffer.width).toBe(W); // まだ拡張されていない
 
     // キャンバス左端 (x=5) に描く → レイヤローカル x = 5-30 = -25 → 拡張が必要
     s = applyOperation(s, createBrushOp(BASE_LAYER_ID, line(5, 20, 5, 20, 1), RED, W, H));
 
     // バッファは左方向に拡張されている（オフセットも補正）
-    expect(s.layers[0].buffer.width).toBeGreaterThan(W);
-    expect(s.layers[0].offsetX).toBeLessThan(30);
+    expect(leafAt(s, 0).buffer.width).toBeGreaterThan(W);
+    expect(leafAt(s, 0).offsetX).toBeLessThan(30);
 
     // 合成画像のキャンバス(5,20)に赤が見える
     const flat = flattenState(s);
@@ -57,9 +57,9 @@ describe('非破壊レイヤ移動 + バッファ拡張', () => {
     const merged = brushHandler.consolidate!(opA, opB)!;
     const once = applyOperation(base, merged);
 
-    expect(once.layers[0].buffer.width).toBe(seq.layers[0].buffer.width);
-    expect(once.layers[0].buffer.height).toBe(seq.layers[0].buffer.height);
-    expect(once.layers[0].offsetX).toBe(seq.layers[0].offsetX);
-    expect(buffersEqual(seq.layers[0].buffer, once.layers[0].buffer)).toBe(true);
+    expect(leafAt(once, 0).buffer.width).toBe(leafAt(seq, 0).buffer.width);
+    expect(leafAt(once, 0).buffer.height).toBe(leafAt(seq, 0).buffer.height);
+    expect(leafAt(once, 0).offsetX).toBe(leafAt(seq, 0).offsetX);
+    expect(buffersEqual(leafAt(seq, 0).buffer, leafAt(once, 0).buffer)).toBe(true);
   });
 });

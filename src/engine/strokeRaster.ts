@@ -52,7 +52,10 @@ export function rasterizeStroke(
     const dx = p.x - p0.x;
     const dy = p.y - p0.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const spacing = Math.max(0.5, baseRadius * 0.5);
+    // spacing は「区間内で最小となるスタンプ半径」に比例させる。筆圧が低く半径が小さい区間でも
+    // 必ずダブが重なる（spacing ≤ 半径）ため、粒状の隙間が出ず滑らかな線になる。
+    const minPr = Math.max(0.05, Math.min(p0.pressure, p.pressure));
+    const spacing = Math.max(0.35, baseRadius * minPr * 0.35);
     const steps = Math.max(1, Math.ceil(dist / spacing));
     for (let s = 1; s <= steps; s++) {
       const t = s / steps;

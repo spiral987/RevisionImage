@@ -5,7 +5,7 @@ import { applyOperation } from '../src/engine/operation';
 import { createAddImageLayerOp } from '../src/engine/operations';
 import { bufferToBase64, base64ToBuffer } from '../src/engine/imageBuffer';
 import type { ImageBuffer } from '../src/types';
-import { statesEqual } from './helpers';
+import { statesEqual, asLayer } from './helpers';
 
 const W = 32;
 const H = 32;
@@ -39,7 +39,7 @@ describe('addImageLayer', () => {
     session.apply(createAddImageLayerOp('img-1', 'photo', buf, 4, 6, W, H));
 
     // 配置されたレイヤの画素・オフセットが入力どおり。
-    const layer = session.state.layers.find((l) => l.id === 'img-1')!;
+    const layer = asLayer(session.state.layers.find((l) => l.id === 'img-1')!);
     expect(layer.offsetX).toBe(4);
     expect(layer.offsetY).toBe(6);
     expect(layer.buffer.width).toBe(20);

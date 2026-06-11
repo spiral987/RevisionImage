@@ -1,4 +1,4 @@
-import type { BBox, Layer } from '../types';
+import type { BBox, Layer, LayerGroup, LayerNode } from '../types';
 import { createImageBuffer, cloneImageBuffer } from './imageBuffer';
 
 export function createLayer(id: string, name: string, width: number, height: number): Layer {
@@ -11,6 +11,36 @@ export function createLayer(id: string, name: string, width: number, height: num
     visible: true,
     opacity: 1,
   };
+}
+
+/** ノードがフォルダ(LayerGroup)か（リーフ Layer との型ガード）。 */
+export function isGroup(node: LayerNode): node is LayerGroup {
+  return 'children' in node;
+}
+
+export function createGroup(id: string, name: string): LayerGroup {
+  return { id, name, visible: true, opacity: 1, collapsed: false, children: [] };
+}
+
+/** ノード以下の全リーフ(Layer)の id を集める。 */
+export function collectLeafIds(node: LayerNode): string[] {
+  if (!isGroup(node)) return [node.id];
+  return node.children.flatMap(collectLeafIds);
+}
+
+/** ノード自身と全子孫の id を集める（グループ含む。サイクル検出に使う）。 */
+export function collectNodeIds(node: LayerNode): string[] {
+  if (!isGroup(node)) return [node.id];
+  return [node.id, ...node.children.flatMap(collectNodeIds)];
+}
+
+/** ノード配列内の最初のリーフ id（active 付け替えのフォールバック用）。 */
+export function firstLeafId(nodes: LayerNode[]): string | undefined {
+  for (const n of nodes) {
+    const ids = collectLeafIds(n);
+    if (ids.length) return ids[0];
+  }
+  return undefined;
 }
 
 /**

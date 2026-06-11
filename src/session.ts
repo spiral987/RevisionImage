@@ -20,8 +20,8 @@ export class EditorSession {
   state: EditorState;
   readonly logger = new Logger();
   revisions: CommittedRevision[] = [];
-  readonly width: number;
-  readonly height: number;
+  width: number;
+  height: number;
 
   /**
    * Undo/Redo はログ全体のスナップショット列で管理する。
@@ -120,8 +120,30 @@ export class EditorSession {
     this.redoStack = [];
   }
 
+  /**
+   * キャンバスサイズを変更する。操作ログは保持したまま新サイズで replay し直すため、
+   * 全内容は同じ絶対座標を保つ（＝左上基準のキャンバスリサイズ / 拡張・切り詰め）。
+   * width/height を変えても不変条件 state === replay(log) は新サイズ基準で成立する。
+   */
+  resize(width: number, height: number): void {
+    this.width = width;
+    this.height = height;
+    this.restore(this.getLog()); // 現ログを新サイズで再構築
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+
   /** 永続化された操作ログ + リビジョンを読み込む（リロード復元 / JSON インポート）。 */
-  loadProject(p: { log: readonly Operation[]; revisions: readonly CommittedRevision[] }): void {
+  loadProject(p: {
+    width?: number;
+    height?: number;
+    log: readonly Operation[];
+    revisions: readonly CommittedRevision[];
+  }): void {
+    if (typeof p.width === 'number' && typeof p.height === 'number') {
+      this.width = p.width;
+      this.height = p.height;
+    }
     this.checkout(p.log);
     this.revisions = p.revisions.map((r) => ({
       id: r.id,

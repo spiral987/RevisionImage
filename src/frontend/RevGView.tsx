@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import type { Dag, ImageBuffer, Operation } from '../types';
 import type { EditorSession } from '../session';
 import { Replayer } from '../backend/replayer';
 import { flattenState } from '../engine/composite';
+import { createInitialState } from '../engine/editorState';
 import { downsampleBuffer } from '../engine/imageBuffer';
 import { layoutNodes } from '../backend/filters/layout';
 import { buildRevG, type RevGCluster } from '../backend/filters/importance';
@@ -30,7 +31,7 @@ function labelOf(op: Operation, memberCount: number): string {
   return memberCount > 1 ? `${base} (+${memberCount - 1})` : base;
 }
 
-export function RevGView({
+export const RevGView = memo(function RevGView({
   session,
   dag,
   version,
@@ -46,19 +47,70 @@ export function RevGView({
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
 
-  // 各 DAG ノードの結果画像から、サムネイル(dataURL)と importance用縮小バッファを一括生成。
+  // サムネイル(dataURL) と importance 用縮小バッファをノード単位でキャッシュする。
+  // 編集で変化するのは末尾ノードだけなので、通常はライブ状態から1枚だけ生成すればよい
+  // （全ノード再生成 + 全 dataURL 再デコードが描画直後の固着の原因だった）。
+  // op の参照が変われば（consolidate で新オブジェクトになる）再生成する。
+  const cacheRef = useRef(new Map<string, { op: Operation | null; thumb: string; small: ImageBuffer }>());
+  const sizeKeyRef = useRef('');
+
   const { thumbs, flatSmall } = useMemo(() => {
-    const replayer = new Replayer(session.width, session.height);
-    const states = replayer.replayAll(log);
+    const t0 = performance.now();
+    const cache = cacheRef.current;
+    const sizeKey = `${session.width}x${session.height}`;
+    if (sizeKeyRef.current !== sizeKey) {
+      cache.clear(); // キャンバスサイズが変わったらサムネイルを作り直す
+      sizeKeyRef.current = sizeKey;
+    }
+
+    const gen = (id: string, op: Operation | null, full: ImageBuffer) => {
+      cache.set(id, {
+        op,
+        thumb: bufferToDataURL(full, THUMB_W, THUMB_H),
+        small: downsampleBuffer(full, IMP_W, IMP_H),
+      });
+    };
+
+    if (!cache.has(ROOT_ID)) {
+      gen(ROOT_ID, null, flattenState(createInitialState(session.width, session.height)));
+    }
+
+    const missing = log.filter((op) => {
+      const c = cache.get(op.id);
+      return !c || c.op !== op;
+    });
+    if (missing.length > 0) {
+      const lastId = log.length ? log[log.length - 1].id : null;
+      if (missing.length === 1 && missing[0].id === lastId) {
+        // 差分編集: 変わったのは末尾ノードのみ → ライブ状態から生成（replay 不要）。
+        gen(lastId!, log[log.length - 1], flattenState(session.state));
+      } else {
+        // checkout/undo/load 等: 必要な中間状態を replay で得て、欠けたノードだけ生成。
+        const states = new Replayer(session.width, session.height).replayAll(log);
+        log.forEach((op, i) => {
+          const c = cache.get(op.id);
+          if (!c || c.op !== op) gen(op.id, op, flattenState(states[i + 1]));
+        });
+      }
+    }
+
+    // 現在のノード集合（ROOT + log）以外のキャッシュを掃除する。
+    const live = new Set<string>([ROOT_ID, ...log.map((o) => o.id)]);
+    for (const id of [...cache.keys()]) if (!live.has(id)) cache.delete(id);
+
     const thumbsMap = new Map<string, string>();
     const smallMap = new Map<string, ImageBuffer>();
-    const add = (id: string, idx: number) => {
-      const full = flattenState(states[idx]);
-      thumbsMap.set(id, bufferToDataURL(full, THUMB_W, THUMB_H));
-      smallMap.set(id, downsampleBuffer(full, IMP_W, IMP_H));
-    };
-    add(ROOT_ID, 0);
-    log.forEach((op, i) => add(op.id, i + 1));
+    for (const id of live) {
+      const c = cache.get(id)!;
+      thumbsMap.set(id, c.thumb);
+      smallMap.set(id, c.small);
+    }
+    // 診断: サムネイル生成が重い時だけ出力（通常は無音。不要になったら削除可）。
+    const dt = performance.now() - t0;
+    if (dt > 8) {
+      // eslint-disable-next-line no-console
+      console.info(`[perf] RevG thumbs ${dt.toFixed(1)}ms (nodes=${live.size}, regen=${missing.length})`);
+    }
     return { thumbs: thumbsMap, flatSmall: smallMap };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, session]);
@@ -160,4 +212,4 @@ export function RevGView({
       </div>
     </div>
   );
-}
+});

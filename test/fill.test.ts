@@ -3,7 +3,7 @@ import { EditorSession } from '../src/session';
 import { BASE_LAYER_ID, createInitialState } from '../src/engine/editorState';
 import { applyOperation } from '../src/engine/operation';
 import { createBrushOp, createFillOp, fillRegion } from '../src/engine/operations';
-import { line, statesEqual } from './helpers';
+import { line, statesEqual, leafAt } from './helpers';
 
 const W = 24;
 const H = 24;
@@ -23,7 +23,7 @@ describe('塗りつぶし (fill)', () => {
     expect(region.h).toBe(H);
 
     session.apply(createFillOp(BASE_LAYER_ID, [10, 200, 40], 1, 12, 12, 0, region, W, H));
-    const buf = session.state.layers[0].buffer;
+    const buf = leafAt(session.state, 0).buffer;
     const i = (12 * buf.width + 12) * 4;
     expect([buf.data[i], buf.data[i + 1], buf.data[i + 2], buf.data[i + 3]]).toEqual([10, 200, 40, 255]);
     expect(statesEqual(session.state, replay(session))).toBe(true);
@@ -45,7 +45,7 @@ describe('塗りつぶし (fill)', () => {
     const region = fillRegion(session.state, BASE_LAYER_ID, 1, 1, 0);
     session.apply(createFillOp(BASE_LAYER_ID, [255, 0, 0], 1, 1, 1, 0, region, W, H));
 
-    const buf = session.state.layers[0].buffer;
+    const buf = leafAt(session.state, 0).buffer;
     const at = (x: number, y: number) => {
       const i = (y * buf.width + x) * 4;
       return [buf.data[i], buf.data[i + 1], buf.data[i + 2], buf.data[i + 3]];

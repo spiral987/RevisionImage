@@ -12,7 +12,7 @@ import {
   createAddLayerOp,
   brushHandler,
 } from '../src/engine/operations';
-import { statesEqual, line } from './helpers';
+import { statesEqual, line, leafAt } from './helpers';
 
 const W = 64;
 const H = 64;
@@ -33,15 +33,15 @@ describe('operation determinism (同入力 → ビット一致)', () => {
     const strokes = line(10, 10, 50, 30, 7);
     const a = applyOperation(s0, createBrushOp(BASE_LAYER_ID, strokes, { color: [255, 0, 0], size: 8, opacity: 1 }, W, H));
     const b = applyOperation(s0, createBrushOp(BASE_LAYER_ID, strokes, { color: [255, 0, 0], size: 8, opacity: 1 }, W, H));
-    expect(buffersEqual(a.layers[0].buffer, b.layers[0].buffer)).toBe(true);
-    expect(buffersEqual(a.layers[0].buffer, s0.layers[0].buffer)).toBe(false);
+    expect(buffersEqual(leafAt(a, 0).buffer, leafAt(b, 0).buffer)).toBe(true);
+    expect(buffersEqual(leafAt(a, 0).buffer, leafAt(s0, 0).buffer)).toBe(false);
   });
 
   it('apply does not mutate the input state (purity)', () => {
     const s0 = createInitialState(W, H);
-    const before = new Uint8ClampedArray(s0.layers[0].buffer.data);
+    const before = new Uint8ClampedArray(leafAt(s0, 0).buffer.data);
     applyOperation(s0, createBrushOp(BASE_LAYER_ID, line(0, 0, 30, 30), { color: [1, 2, 3], size: 6, opacity: 1 }, W, H));
-    expect(buffersEqual(s0.layers[0].buffer, { width: W, height: H, data: before })).toBe(true);
+    expect(buffersEqual(leafAt(s0, 0).buffer, { width: W, height: H, data: before })).toBe(true);
   });
 
   it('all six operations are deterministic', () => {
@@ -72,6 +72,6 @@ describe('operation determinism (同入力 → ビット一致)', () => {
     const merged = brushHandler.consolidate!(opA, opB)!;
     const once = applyOperation(s0, merged);
 
-    expect(buffersEqual(seq.layers[0].buffer, once.layers[0].buffer)).toBe(true);
+    expect(buffersEqual(leafAt(seq, 0).buffer, leafAt(once, 0).buffer)).toBe(true);
   });
 });

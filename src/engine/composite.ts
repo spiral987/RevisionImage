@@ -1,5 +1,6 @@
-import type { EditorState, ImageBuffer, Layer } from '../types';
+import type { EditorState, ImageBuffer, Layer, LayerNode } from '../types';
 import { createImageBuffer } from './imageBuffer';
+import { isGroup } from './layer';
 
 export interface FlattenOptions {
   /** 背景色 RGBA(0..255)。既定は不透明白（エディタ表示と一致）。 */
@@ -22,15 +23,38 @@ export function flattenState(state: EditorState, opts?: FlattenOptions): ImageBu
     d[i + 2] = bb;
     d[i + 3] = ba;
   }
-  for (const layer of state.layers) {
-    if (!layer.visible || layer.opacity <= 0) continue;
-    compositeLayer(out, layer);
-  }
+  compositeNodes(out, state.layers, state.width, state.height);
   return out;
 }
 
+/**
+ * レイヤーツリーを下から順に out に合成する（再帰）。
+ * フォルダ(group)は子を独立した透明バッファに合成してから、group 全体の opacity で out に重ねる
+ * （フォルダの不透明度/表示がまとめて効く＝isolation）。
+ */
+function compositeNodes(out: ImageBuffer, nodes: LayerNode[], width: number, height: number): void {
+  for (const node of nodes) {
+    if (!node.visible || node.opacity <= 0) continue;
+    if (isGroup(node)) {
+      const groupBuf = createImageBuffer(width, height);
+      compositeNodes(groupBuf, node.children, width, height);
+      compositeLayer(out, {
+        id: node.id,
+        name: node.name,
+        buffer: groupBuf,
+        offsetX: 0,
+        offsetY: 0,
+        visible: true,
+        opacity: node.opacity,
+      });
+    } else {
+      compositeLayer(out, node);
+    }
+  }
+}
+
 /** 1レイヤを offset 位置・opacity 込みで out に source-over 合成する。 */
-function compositeLayer(out: ImageBuffer, layer: Layer): void {
+export function compositeLayer(out: ImageBuffer, layer: Layer): void {
   const { buffer, opacity } = layer;
   // オフセットは設計上整数だが、非整数だと宛先インデックスが非整数になり代入が
   // サイレントに無視され、レイヤが消える。防御的に丸めて整数化する。
