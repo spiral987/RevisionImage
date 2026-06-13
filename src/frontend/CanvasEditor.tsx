@@ -59,7 +59,7 @@ type Tool =
   | 'line'
   | 'rect'
   | 'transform'
-  | 'select';
+  | 'inspect';
 
 const TOOLS: { id: Tool; label: string; key: string }[] = [
   { id: 'brush', label: 'Brush', key: 'B' },
@@ -69,8 +69,13 @@ const TOOLS: { id: Tool; label: string; key: string }[] = [
   { id: 'line', label: 'Line', key: 'L' },
   { id: 'rect', label: 'Rect', key: 'R' },
   { id: 'transform', label: 'Transform', key: 'V' },
-  { id: 'select', label: 'Select', key: 'S' },
+  // 旧「Select」。矩形で領域を指定して履歴（操作）を特定・ハイライトする = マスクではない。
+  { id: 'inspect', label: 'Inspect', key: 'Q' },
 ];
+
+// S 押下中にキャンバスを上下ドラッグして太さ調整するときの感度（ドラッグpx → 太さ変化量）。
+// MergeView と同じ操作感に揃える。
+const SIZE_DRAG_FACTOR = 0.5;
 
 // ---- Transform ツール（移動・拡大縮小・回転を1ツールに統合） ----
 // 1ドラッグ = 1操作。move は非破壊の translate、scale/rotate は transform（resample）として確定する。
@@ -196,8 +201,11 @@ export function CanvasEditor({
   const xformBaseStateRef = useRef<EditorState | null>(null);
   const selectRef = useRef<{ startX: number; startY: number } | null>(null);
   const shapeRef = useRef<{ startX: number; startY: number } | null>(null);
+  // S キー押下中の「太さ調整モード」での上下ドラッグ（押下時の clientY と太さを控える）。
+  const sizeDragRef = useRef<{ startY: number; startSize: number } | null>(null);
 
   const [tool, setTool] = useState<Tool>('brush');
+  const [sizeAdjust, setSizeAdjust] = useState(false); // S キー押下中 = 太さ調整モード
   const [color, setColor] = useState('#e23b3b');
   // size はツールごとに保持する（Brush と Eraser で別々の太さを記憶）。
   const [sizes, setSizes] = useState<Record<string, number>>({ brush: 6, eraser: 16, line: 4, rect: 4 });
@@ -378,7 +386,7 @@ export function CanvasEditor({
       case 'l': case 'L': setTool('line'); break;
       case 'r': case 'R': setTool('rect'); break;
       case 'v': case 'V': setTool('transform'); break;
-      case 's': case 'S': setTool('select'); break;
+      case 'q': case 'Q': setTool('inspect'); break;
       case '[': setSize((s) => Math.max(1, s - 2)); break;
       case ']': setSize((s) => Math.min(80, s + 2)); break;
     }
@@ -388,6 +396,32 @@ export function CanvasEditor({
     const h = (e: KeyboardEvent) => kbRef.current(e);
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  // S キーを押している間だけ「太さ調整モード」（MergeView と同じ操作感）。このモードでキャンバスを
+  // ペン押下→上ドラッグで太く・下ドラッグで細く。入力欄フォーカス中・Ctrl/⌘併用時は無効。
+  useEffect(() => {
+    const isField = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
+    const down = (e: KeyboardEvent) => {
+      if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !isField(e.target)) {
+        setSizeAdjust(true);
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === 's' || e.key === 'S') setSizeAdjust(false);
+    };
+    const reset = () => setSizeAdjust(false);
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', reset);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', reset);
+    };
   }, []);
 
   // ---- ズーム / パン（視点移動。transform のみ。ログ・画素には影響しない） ----
@@ -738,6 +772,13 @@ export function CanvasEditor({
     const c = canvasRef.current!;
     c.setPointerCapture?.(e.pointerId);
     const pt = getPoint(e);
+    // S 押下中（太さ調整モード）: 押下位置にリングを固定し、上下ドラッグで太さを変える。
+    // 太さを持つツール（ブラシ/消しゴム/直線/矩形 = showCursor）のときだけ有効。
+    if (sizeAdjust && showCursor) {
+      sizeDragRef.current = { startY: e.clientY, startSize: size };
+      moveCursor(e.clientX, e.clientY); // リングを押下位置へ固定（以後は追従させない）
+      return;
+    }
     if (tool === 'eyedropper') {
       pickColor(pt.x, pt.y);
     } else if (tool === 'bucket') {
@@ -772,7 +813,7 @@ export function CanvasEditor({
       }
       buildXformPreview(); // ドラッグ中の高速プレビュー用に下地/上層/本体を1度だけ焼く
       c.style.cursor = hit.mode === 'rotate' ? 'grabbing' : xformCursor(hit);
-    } else if (tool === 'select') {
+    } else if (tool === 'inspect') {
       selectRef.current = { startX: pt.x, startY: pt.y };
     } else if (tool === 'line' || tool === 'rect') {
       shapeRef.current = { startX: pt.x, startY: pt.y };
@@ -796,6 +837,12 @@ export function CanvasEditor({
       const d = panningRef.current;
       setPan(clampPan({ x: d.left + (e.clientX - d.x), y: d.top + (e.clientY - d.y) }));
       if (showCursor) moveCursor(e.clientX, e.clientY); // パン中もリングカーソルを追従させる
+      return;
+    }
+    // 太さ調整ドラッグ中: 上=太く / 下=細く。リングは押下位置に固定したまま大きさだけ変える。
+    if (sizeDragRef.current) {
+      const d = sizeDragRef.current;
+      setSize(Math.round(d.startSize + (d.startY - e.clientY) * SIZE_DRAG_FACTOR));
       return;
     }
     if (showCursor) moveCursor(e.clientX, e.clientY);
@@ -850,6 +897,10 @@ export function CanvasEditor({
   const onPointerUp = (e: ReactPointerEvent) => {
     if (panningRef.current) {
       panningRef.current = null;
+      return;
+    }
+    if (sizeDragRef.current) {
+      sizeDragRef.current = null;
       return;
     }
     if (drawingRef.current) {
@@ -1497,14 +1548,16 @@ export function CanvasEditor({
 
       <div
         ref={cursorRef}
-        className="brush-cursor"
+        className={`brush-cursor ${sizeAdjust ? 'sizing' : ''}`}
         style={{
           width: size * zoom,
           height: size * zoom,
           display: showCursor && hovering && !previewing ? 'block' : 'none',
-          borderColor: tool === 'eraser' ? '#fff' : color,
+          borderColor: sizeAdjust ? '#56ccf2' : tool === 'eraser' ? '#fff' : color,
         }}
-      />
+      >
+        {sizeAdjust && <span className="brush-cursor-label">{size}px</span>}
+      </div>
 
       {previewing && (
         <div className="preview-banner">
@@ -1564,18 +1617,23 @@ export function CanvasEditor({
             ))}
           </div>
           {showCursor && (
-            <label className="field">
-              <span>
-                {tool} size {size}px
+            <>
+              <label className="field">
+                <span>
+                  {tool} size {size}px
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={80}
+                  value={size}
+                  onChange={(e) => setSize(Number(e.target.value))}
+                />
+              </label>
+              <span className={`keyhint-badge ${sizeAdjust ? 'on' : ''}`}>
+                S 押下＋キャンバスを上下ドラッグ＝太さ調整
               </span>
-              <input
-                type="range"
-                min={1}
-                max={80}
-                value={size}
-                onChange={(e) => setSize(Number(e.target.value))}
-              />
-            </label>
+            </>
           )}
           <label className="field">
             <span>opacity {opacity.toFixed(2)}</span>
@@ -1607,8 +1665,8 @@ export function CanvasEditor({
             </p>
           )}
           <p className="hint">
-            B=Brush E=Eraser G=Fill I=Pick L=Line R=Rect V=Transform S=Select／[ ]=サイズ／
-            Ctrl+Z=Undo Ctrl+Shift+Z=Redo
+            B=Brush E=Eraser G=Fill I=Pick L=Line R=Rect V=Transform Q=Inspect／
+            S押下＋上下ドラッグ or [ ]=サイズ／Ctrl+Z=Undo Ctrl+Shift+Z=Redo
           </p>
         </Section>
 

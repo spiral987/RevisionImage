@@ -210,6 +210,24 @@ export function App() {
     setVersion((v) => v + 1);
   };
 
+  // コミット点（リビジョン）の削除。保存済みチェックポイントを消すだけで作業状態は不変。
+  // 参照していた選択/比較/マージのペアは解除する。統合 RevG は revisions 変化で再構築される。
+  const deleteRev = (rev: CommittedRevision) => {
+    const i = revisions.findIndex((r) => r.id === rev.id);
+    if (
+      !window.confirm(
+        `コミット「#${i} ${rev.label}」を削除しますか？\n保存したチェックポイントが消えるだけで、作業中の状態には影響しません。`,
+      )
+    )
+      return;
+    session.deleteRevision(rev.id);
+    setRevisions([...session.revisions]);
+    setSelectedRevIds((prev) => prev.filter((x) => x !== rev.id));
+    setDiffPair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
+    setMergePair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
+    setSelectedNodeId(null);
+  };
+
   const toggleRev = (id: string) => {
     setSelectedRevIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 2 ? [prev[1], id] : [...prev, id],
@@ -364,6 +382,16 @@ export function App() {
                   >
                     Checkout
                   </button>
+                  <button
+                    className="rev-delete"
+                    title="このコミットを削除（作業中の状態には影響しません）"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteRev(r);
+                    }}
+                  >
+                    🗑
+                  </button>
                 </li>
               ))}
             </ul>
@@ -407,6 +435,7 @@ export function App() {
               setSelectedRevIds([a.id, b.id]);
               setMergePair([a, b]);
             }}
+            onDeleteRevision={(rev) => deleteRev(rev)}
           />
         </section>
       </FloatWindow>

@@ -168,6 +168,19 @@ export class EditorSession {
   }
 
   /**
+   * 確定リビジョン（コミット点）を削除する。リビジョンは保存済みのチェックポイントに過ぎず、
+   * **作業ログ・DAG・現在の状態には一切影響しない**（共有ノードは他ブランチ/作業ログが参照する限り
+   * 統合DAGに残り、消えるのはそのリビジョン固有のノードとコミットタグ/強制アンカーだけ）。
+   * 原論文には無い操作だが、RevG のコミット点が増えすぎたときの整理用に追加した。
+   * 削除できたら true。
+   */
+  deleteRevision(id: string): boolean {
+    const before = this.revisions.length;
+    this.revisions = this.revisions.filter((r) => r.id !== id);
+    return this.revisions.length !== before;
+  }
+
+  /**
    * 指定した操作列を作業状態として読み込む（checkout）。以後の編集はこの状態から分岐する。
    * Merge やリビジョン間の作業切り替えに使う。ログは consolidate せず厳密に復元する。
    */

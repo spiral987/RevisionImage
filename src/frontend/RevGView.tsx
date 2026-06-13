@@ -21,7 +21,7 @@ const PAD = 16;
 const IMP_W = 64; // importance 計算用の縮小サイズ
 const IMP_H = 48;
 const MENU_W = 215; // 右クリックメニューの想定サイズ（画面端クランプ用）
-const MENU_H = 150;
+const MENU_H = 196;
 
 function labelOf(op: Operation, memberCount: number): string {
   const p = op.params as Record<string, unknown>;
@@ -46,6 +46,7 @@ export const RevGView = memo(function RevGView({
   onCheckoutRevision,
   onCompareRevisions,
   onMergeRevisions,
+  onDeleteRevision,
 }: {
   session: EditorSession;
   // 統合DAG（全リビジョン + 作業ログを重ねたもの）。
@@ -62,6 +63,7 @@ export const RevGView = memo(function RevGView({
   onCheckoutRevision: (rev: CommittedRevision) => void;
   onCompareRevisions: (a: CommittedRevision, b: CommittedRevision) => void;
   onMergeRevisions: (trunk: CommittedRevision, branch: CommittedRevision) => void;
+  onDeleteRevision: (rev: CommittedRevision) => void;
 }) {
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
@@ -412,6 +414,16 @@ export const RevGView = memo(function RevGView({
               }}
             >
               Merge with…（これを trunk に）
+            </button>
+            <div className="revg-menu-sep" />
+            <button
+              className="revg-menu-danger"
+              onClick={() => {
+                onDeleteRevision(menuRev);
+                setMenu(null);
+              }}
+            >
+              Delete（このコミットを削除）
             </button>
           </div>,
           document.body,

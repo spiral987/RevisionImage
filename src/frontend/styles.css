@@ -298,6 +298,25 @@ body {
   z-index: 5;
 }
 
+/* 太さ調整モード（S 押下中）のリング。青く強調し、数値ラベルを下に出す。 */
+.brush-cursor.sizing {
+  border-width: 2px;
+  border-style: dashed;
+}
+.brush-cursor-label {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 6px);
+  font-size: 11px;
+  line-height: 1;
+  color: #56ccf2;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
 .key-hint {
   font-size: 10px;
   opacity: 0.6;
@@ -894,6 +913,17 @@ button.active {
   color: var(--muted);
   cursor: default;
 }
+.revg-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+.revg-menu-danger {
+  color: #eb5757 !important;
+}
+.revg-menu-danger:hover:not(:disabled) {
+  background: rgba(235, 87, 87, 0.16) !important;
+}
 
 /* diff/merge の「2つ目を選択」待ちバナー。 */
 .revg-pending {
@@ -1043,6 +1073,23 @@ button.active {
   background: #fff;
 }
 
+/* 修飾キー押下中だけ光るヒントバッジ（Tools 窓・MergeView 共通）。
+   通常はくすんだ枠、対応キー押下中（.on）は青く点灯してモードを示す。 */
+.keyhint-badge {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.keyhint-badge.on {
+  color: #fff;
+  background: #56ccf2;
+  border-color: #56ccf2;
+}
+
 .diff-controls {
   margin-top: 14px;
   display: flex;
@@ -1087,6 +1134,21 @@ button.active {
   margin-left: 6px;
   padding: 3px 8px;
   font-size: 12px;
+}
+
+/* コミット削除ボタン（リビジョン一覧）。控えめに置き、hover で赤を強める。 */
+.rev-delete {
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1;
+  border-color: transparent;
+  background: transparent;
+  opacity: 0.6;
+}
+.rev-delete:hover {
+  opacity: 1;
+  border-color: #eb5757;
+  background: rgba(235, 87, 87, 0.14);
 }
 
 .save-indicator {
