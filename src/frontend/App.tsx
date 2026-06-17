@@ -204,8 +204,28 @@ export function App() {
     setCommitLabel('');
   };
 
+  // 現在の作業ログが既存リビジョンのいずれかとして保存済みか（op id 列で判定）。
+  const isWorkingSaved = (): boolean => {
+    const log = session.getLog();
+    return session.revisions.some(
+      (r) => r.ops.length === log.length && r.ops.every((o, i) => o.id === log[i].id),
+    );
+  };
+
+  // checkout / merge など「作業ログを置き換える破壊的操作」の直前に呼ぶ。未保存(=どのリビジョンにも
+  // 一致しない)作業があれば、自動でチェックポイント・リビジョンとしてコミットしてから先へ進む。
+  // これにより「コミット前の作業が無確認で消える」事態を防ぐ（コミット済みは決して失われない）。
+  // 自動保存したら true。
+  const autoCheckpointIfDirty = (): boolean => {
+    if (session.getLog().length === 0 || isWorkingSaved()) return false;
+    session.commitRevision('自動保存（切り替え前）');
+    return true;
+  };
+
   const checkout = (rev: CommittedRevision) => {
+    autoCheckpointIfDirty(); // 未コミットの作業を失わないよう、切り替え前に自動チェックポイント
     session.checkout(rev.ops);
+    setRevisions([...session.revisions]);
     setSelectedNodeId(null);
     setVersion((v) => v + 1);
   };
@@ -242,6 +262,7 @@ export function App() {
   };
 
   const onMerged = (mergedOps: Operation[], label: string) => {
+    autoCheckpointIfDirty(); // マージ確定も作業ログを置き換えるので、未コミット作業を先に保存
     session.checkout(mergedOps);
     session.commitRevision(label);
     setRevisions([...session.revisions]);
