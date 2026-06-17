@@ -42,9 +42,9 @@ import {
 import { genId } from '../util/id';
 import { layerContentBBox, isGroup, collectLeafIds, collectNodeIds } from '../engine/layer';
 import { getLayer, getNode, updateNode, getParentInfo } from '../engine/editorState';
-import { flattenState } from '../engine/composite';
-import { rasterizeStroke } from '../engine/strokeRaster';
-import { blendPixel, createImageBuffer } from '../engine/imageBuffer';
+import { flattenState, compositeLayer } from '../engine/composite';
+import { rasterizeSegment, stampDab, type StampFn } from '../engine/strokeRaster';
+import { blendPixel, erasePixel } from '../engine/imageBuffer';
 import { clampBBox, padBBox, strokesBBox, unionBBox } from '../engine/geom';
 import { compositeToCanvas } from './render';
 import { describeOp } from './opLabel';
@@ -760,6 +760,138 @@ export function CanvasEditor({
     });
   };
 
+  // ---- ブラシ/消しゴムのドラッグ中プレビュー（増分ラスタライズ） ----
+  // 旧実装は pointer move 毎に「ストローク全点を最初から再ラスタライズ＋全レイヤ全面合成」していたため、
+  // 線が伸びるほど 1フレームが重くなった（O(n^2) + 毎フレーム全面合成）。透明レイヤーへ長い陰影線を
+  // 何度も往復させる使い方で特に顕著だった。
+  // ここでは Transform の高速プレビュー(buildXformPreview/renderXformPreview)と同じく、下地/上層を
+  // down 時に1回だけ焼き、アクティブレイヤの作業バッファ(キャンバス座標)へ「新しい区間のダブだけ」を
+  // 増分スタンプする。毎フレームのコストはストローク長に依存せず一定になる。
+  // 確定結果は pointer up 時に従来どおり決定的に再計算する（プレビューの微小な合成誤差はそこで解消）。
+  const brushPreviewRef = useRef<{
+    below: HTMLCanvasElement; // アクティブより下＋背景（不透明, 1回焼き）
+    above: HTMLCanvasElement; // アクティブより上（透明背景, 1回焼き）
+    activeBuf: ImageBuffer; // アクティブレイヤ内容＋描画中ストローク（キャンバス座標, full-canvas）
+    activeCanvas: HTMLCanvasElement; // activeBuf を putImageData で反映する 2D canvas
+    activeImage: ImageData; // activeBuf.data をラップ（dirty 矩形 putImageData で再利用）
+    opacity: number; // アクティブレイヤの不透明度（合成時に globalAlpha で適用）
+    radius: number;
+    stamp: StampFn; // ブラシ=blend / 消しゴム=erase。strokeOpacity を内包。
+    last: StrokePoint | null; // 直前にスタンプした点（次区間の起点）
+  } | null>(null);
+  const brushRafRef = useRef<number | null>(null);
+
+  // ドラッグ開始時に1回だけ呼ぶ。ルート直下の可視リーフのときだけ増分プレビューを構築する
+  // （グループ内/非表示は false を返し、呼び出し側が従来の決定的プレビューにフォールバック）。
+  const buildBrushPreview = (firstPt: StrokePoint): boolean => {
+    brushPreviewRef.current = null;
+    const layers = session.state.layers;
+    const k = layers.findIndex((n) => n.id === activeLayerId);
+    if (k < 0) return false;
+    const node = layers[k];
+    if (isGroup(node) || !node.visible) return false;
+    // 作業バッファは activeCanvas の ImageData と同一の Uint8ClampedArray を共有させる。これにより
+    // 増分スタンプの結果を putImageData の dirty 矩形でそのまま activeCanvas へ反映できる。
+    const activeCanvas = document.createElement('canvas');
+    activeCanvas.width = width;
+    activeCanvas.height = height;
+    const actx = activeCanvas.getContext('2d');
+    if (!actx) return false;
+    const activeImage = actx.createImageData(width, height);
+    const activeBuf: ImageBuffer = { width, height, data: activeImage.data };
+    // アクティブレイヤ内容をキャンバス座標へ展開（offset 適用, 範囲外は捨てる）。レイヤ不透明度は
+    // 合成時に globalAlpha で掛けるため、ここでは opacity:1 で焼く。
+    compositeLayer(activeBuf, { ...node, opacity: 1 });
+    actx.putImageData(activeImage, 0, 0);
+    const [r, g, b] = hexToRgb(color);
+    const op = opacity;
+    const stamp: StampFn =
+      tool === 'eraser'
+        ? (buf, x, y, cov) => erasePixel(buf, x, y, op * cov)
+        : (buf, x, y, cov) => blendPixel(buf, x, y, r, g, b, op * cov);
+    brushPreviewRef.current = {
+      below: rasterizeBuffer(flattenState({ ...session.state, layers: layers.slice(0, k) })),
+      above: rasterizeBuffer(
+        flattenState({ ...session.state, layers: layers.slice(k + 1) }, { background: [0, 0, 0, 0] }),
+      ),
+      activeBuf,
+      activeCanvas,
+      activeImage,
+      opacity: node.opacity,
+      radius: size / 2,
+      stamp,
+      last: null,
+    };
+    advanceBrush(firstPt); // 先頭点を1回スタンプ
+    return true;
+  };
+
+  // 新しい点 pt を作業バッファへ増分スタンプし、影響した矩形だけ activeCanvas へ反映する。
+  const advanceBrush = (pt: StrokePoint) => {
+    const pv = brushPreviewRef.current;
+    if (!pv) return;
+    if (pv.last === null) {
+      stampDab(pv.activeBuf, pt, pv.radius, 0, 0, pv.stamp);
+      flushBrushDirty(pv, pt, pt);
+    } else {
+      rasterizeSegment(pv.activeBuf, pv.last, pt, pv.radius, 0, 0, pv.stamp);
+      flushBrushDirty(pv, pv.last, pt);
+    }
+    pv.last = pt;
+  };
+
+  // 区間 [a,b] の影響矩形（半径＋AA分パディング, キャンバスにクランプ）だけ putImageData で反映。
+  const flushBrushDirty = (
+    pv: NonNullable<typeof brushPreviewRef.current>,
+    a: StrokePoint,
+    b: StrokePoint,
+  ) => {
+    const pad = Math.ceil(pv.radius) + 2;
+    const minX = Math.max(0, Math.floor(Math.min(a.x, b.x) - pad));
+    const minY = Math.max(0, Math.floor(Math.min(a.y, b.y) - pad));
+    const maxX = Math.min(width, Math.ceil(Math.max(a.x, b.x) + pad));
+    const maxY = Math.min(height, Math.ceil(Math.max(a.y, b.y) + pad));
+    const w = maxX - minX;
+    const h = maxY - minY;
+    if (w <= 0 || h <= 0) return;
+    const actx = pv.activeCanvas.getContext('2d');
+    if (actx) actx.putImageData(pv.activeImage, 0, 0, minX, minY, w, h);
+  };
+
+  // 下地→アクティブ(レイヤ不透明度)→上層 を GPU drawImage で重ねるだけ（全合成しない）。
+  const renderBrushPreview = () => {
+    const pv = brushPreviewRef.current;
+    const c = canvasRef.current;
+    if (!pv || !c) return;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(pv.below, 0, 0);
+    ctx.save();
+    ctx.globalAlpha = pv.opacity;
+    ctx.drawImage(pv.activeCanvas, 0, 0);
+    ctx.restore();
+    ctx.drawImage(pv.above, 0, 0);
+    drawHighlight(c);
+  };
+
+  const scheduleBrushPreview = () => {
+    if (brushRafRef.current !== null) return;
+    brushRafRef.current = requestAnimationFrame(() => {
+      brushRafRef.current = null;
+      renderBrushPreview();
+    });
+  };
+
+  const teardownBrushPreview = () => {
+    brushPreviewRef.current = null;
+    if (brushRafRef.current !== null) {
+      cancelAnimationFrame(brushRafRef.current);
+      brushRafRef.current = null;
+    }
+  };
+
   const onPointerDown = (e: ReactPointerEvent) => {
     // 中ボタンドラッグ = パン（ツール・キャンバスが収まっているかに関係なく視点移動）。
     if (e.button === 1) {
@@ -824,11 +956,9 @@ export function CanvasEditor({
     } else {
       // brush / eraser
       drawingRef.current = { strokes: [pt] };
-      const snap = ensureSnapshot();
-      const sctx = snap.getContext('2d')!;
-      sctx.clearRect(0, 0, width, height);
-      sctx.drawImage(c, 0, 0);
-      renderStrokePreview(drawingRef.current.strokes);
+      // 増分プレビューを構築（ルート直下の可視リーフのみ）。不可なら従来の決定的プレビュー。
+      if (buildBrushPreview(pt)) renderBrushPreview();
+      else renderStrokePreview(drawingRef.current.strokes);
     }
   };
 
@@ -857,8 +987,14 @@ export function CanvasEditor({
       }
     }
     if (drawingRef.current) {
-      drawingRef.current.strokes.push(getPoint(e));
-      renderStrokePreview(drawingRef.current.strokes);
+      const pt = getPoint(e);
+      drawingRef.current.strokes.push(pt);
+      if (brushPreviewRef.current) {
+        advanceBrush(pt); // 新区間だけ増分スタンプ（軽い）
+        scheduleBrushPreview(); // 合成は rAF で1フレーム1回に間引く
+      } else {
+        renderStrokePreview(drawingRef.current.strokes);
+      }
     } else if (xformRef.current) {
       const g = xformRef.current;
       const pt = getPoint(e);
@@ -906,6 +1042,7 @@ export function CanvasEditor({
     if (drawingRef.current) {
       const strokes = drawingRef.current.strokes;
       drawingRef.current = null;
+      teardownBrushPreview(); // 増分プレビューのキャッシュ/保留rAFを破棄（以降は決定的 repaint）
       if (strokes.length > 0) {
         const op =
           tool === 'eraser'
