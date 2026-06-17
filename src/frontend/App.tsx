@@ -62,6 +62,7 @@ export function App() {
       height: session.height,
       log: session.getLog(),
       revisions: session.revisions,
+      axes: session.axes,
     });
 
   // 読み込み後に dims / 入力欄をセッションへ同期する。

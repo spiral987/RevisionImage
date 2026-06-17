@@ -66,6 +66,43 @@ export interface Revision {
   timestamp: number;
 }
 
+// --- 空間軸（差分制作 / Variants） -----------------------------------------
+// CONCEPT.md §3.1 の「空間エッジ＝対等な別案」を、既存のレイヤー構造に被せる薄い関係層
+// として表す。DAG（操作依存）には入れず、スナップショット集合に対する「読み方」として持つ。
+// 詳細・設計の根拠は docs/mds/PLAN.md §2。
+
+/**
+ * 軸のセル選択モード。
+ * - exclusive: 択一（目6種から1つ）。選んだセルだけ表示、他セルは非表示。
+ * - toggle:    独立トグル（トップス/ボトムスの on/off）。各セルを独立に表示反転。
+ */
+export type VariantAxisMode = 'exclusive' | 'toggle';
+
+/**
+ * 軸に属する1つの別案（セル）。実体は slot（差し替え点）配下の兄弟ノード。
+ * id はそのノードの id（Layer または LayerGroup）に一致する。セル切替＝この id の
+ * 表示/非表示なので、差分切替は既存の setLayerVisibility 操作で決定的に表現できる。
+ */
+export interface VariantCell {
+  id: string; // = slot 配下の兄弟 nodeId（Layer / LayerGroup）
+  name: string;
+  /** 層2（CONCEPT §3.3）: あるリビジョン由来なら出自を保持する。時間→空間の橋。 */
+  sourceRevId?: string;
+}
+
+/**
+ * 空間軸 ＝ 別案（セル）を束ねる単位（「目」「口」「トップス」…）。
+ * slot（差し替え点）＝ base のレイヤーツリー上の 1 ノード id を指す。粒度（目リーフ／顔
+ * フォルダ／キャラ全体）は作家が slot を選ぶことで明示宣言する（CONCEPT §4.2-2）。
+ */
+export interface VariantAxis {
+  id: string;
+  name: string;
+  slotId: string; // 差し替え点 = base ツリー上の Layer/Group id
+  mode: VariantAxisMode;
+  cells: VariantCell[]; // 順序付きセル一覧
+}
+
 // --- エンジン状態 -----------------------------------------------------------
 
 /** 生のピクセルバッファ。DOM の ImageData に依存せず純TSで扱える形にする。 */

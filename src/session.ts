@@ -1,10 +1,11 @@
-import type { Dag, EditorState, Operation } from './types';
+import type { Dag, EditorState, Operation, VariantAxis, VariantAxisMode, VariantCell } from './types';
 import { applyOperation } from './engine/operation';
 import { createInitialState } from './engine/editorState';
 import './engine/operations'; // 操作ハンドラを登録
 import { Logger } from './backend/logger';
 import { buildDag } from './backend/dagBuilder';
 import { buildUnifiedDag, computeHeads, type CommittedRevision } from './backend/revision';
+import { selectionOps } from './backend/variant';
 import { genId } from './util/id';
 
 /**
@@ -29,6 +30,11 @@ export class EditorSession {
   state: EditorState;
   readonly logger = new Logger();
   revisions: CommittedRevision[] = [];
+  /**
+   * 空間軸（差分制作 / Variants）。CONCEPT §3.1 の空間エッジを、操作ログ・DAG とは別の
+   * サイドカーとして保持する（操作依存グラフの不変条件に触れない）。永続化対象。
+   */
+  axes: VariantAxis[] = [];
   width: number;
   height: number;
 
@@ -58,6 +64,23 @@ export class EditorSession {
     this.redoStack = [];
     this.state = applyOperation(this.state, op);
     this.logger.append(op);
+    return this.state;
+  }
+
+  /**
+   * 複数 op を 1 回の undo 単位として適用する（空なら何もしない）。
+   * 例: セル選択（exclusive）は「旧セルを隠す＋新セルを表示」の複数 op になるが、
+   * ユーザの 1 操作なので 1 undo にまとめたい。snapshot を 1 度だけ積み、各 op を順に
+   * 逐次適用＋append するので不変条件 state === replay(log) は維持される。
+   */
+  applyBatch(ops: readonly Operation[]): EditorState {
+    if (ops.length === 0) return this.state;
+    this.pushSnapshot(this.undoStack);
+    this.redoStack = [];
+    for (const op of ops) {
+      this.state = applyOperation(this.state, op);
+      this.logger.append(op);
+    }
     return this.state;
   }
 
@@ -180,6 +203,85 @@ export class EditorSession {
     return this.revisions.length !== before;
   }
 
+  // ---- 空間軸（差分制作 / Variants） ---------------------------------------
+  // CONCEPT §3.1 / §3.4。データモデルのみ（UI は別フェーズ）。
+
+  /** 差し替え点(slotId)に対する空間軸を新規作成する。cells は空で始まる。 */
+  addAxis(name: string, slotId: string, mode: VariantAxisMode = 'exclusive'): VariantAxis {
+    const axis: VariantAxis = {
+      id: genId('axis'),
+      name: name && name.trim() ? name.trim() : `軸 ${this.axes.length + 1}`,
+      slotId,
+      mode,
+      cells: [],
+    };
+    this.axes.push(axis);
+    return axis;
+  }
+
+  /** 軸を削除する（レイヤー実体・作業状態には触れない。読み方を消すだけ）。 */
+  removeAxis(axisId: string): boolean {
+    const before = this.axes.length;
+    this.axes = this.axes.filter((a) => a.id !== axisId);
+    return this.axes.length !== before;
+  }
+
+  getAxis(axisId: string): VariantAxis | undefined {
+    return this.axes.find((a) => a.id === axisId);
+  }
+
+  /** 軸にセルを登録する。cell.id（= slot 配下の兄弟 nodeId）が既出なら冪等に無視。 */
+  addCell(axisId: string, cell: VariantCell): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis || axis.cells.some((c) => c.id === cell.id)) return false;
+    axis.cells.push({ id: cell.id, name: cell.name, sourceRevId: cell.sourceRevId });
+    return true;
+  }
+
+  removeCell(axisId: string, cellId: string): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis) return false;
+    const before = axis.cells.length;
+    axis.cells = axis.cells.filter((c) => c.id !== cellId);
+    return axis.cells.length !== before;
+  }
+
+  /** 軸内のセル順を変更する（行列UIでの並べ替え用）。 */
+  reorderCell(axisId: string, cellId: string, toIndex: number): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis) return false;
+    const from = axis.cells.findIndex((c) => c.id === cellId);
+    if (from < 0) return false;
+    const to = Math.max(0, Math.min(axis.cells.length - 1, toIndex));
+    if (from === to) return false;
+    const cells = [...axis.cells];
+    const [moved] = cells.splice(from, 1);
+    cells.splice(to, 0, moved);
+    axis.cells = cells;
+    return true;
+  }
+
+  setAxisMode(axisId: string, mode: VariantAxisMode): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis || axis.mode === mode) return false;
+    axis.mode = mode;
+    return true;
+  }
+
+  /**
+   * 軸のセルを選択する（exclusive=他を隠す / toggle=反転）。可視が変わるレイヤーへ
+   * setLayerVisibility を 1 undo 単位で適用する。可視構成が変わらなければ false。
+   * 選択は表示 op としてログに残るので replay/commit 整合（差分切替が版に焼ける）。
+   */
+  selectCell(axisId: string, cellId: string): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis) return false;
+    const ops = selectionOps(axis, this.state, cellId);
+    if (ops.length === 0) return false;
+    this.applyBatch(ops);
+    return true;
+  }
+
   /**
    * 指定した操作列を作業状態として読み込む（checkout）。以後の編集はこの状態から分岐する。
    * Merge やリビジョン間の作業切り替えに使う。ログは consolidate せず厳密に復元する。
@@ -203,12 +305,13 @@ export class EditorSession {
     this.redoStack = [];
   }
 
-  /** 永続化された操作ログ + リビジョンを読み込む（リロード復元 / JSON インポート）。 */
+  /** 永続化された操作ログ + リビジョン + 空間軸を読み込む（リロード復元 / JSON インポート）。 */
   loadProject(p: {
     width?: number;
     height?: number;
     log: readonly Operation[];
     revisions: readonly CommittedRevision[];
+    axes?: readonly VariantAxis[];
   }): void {
     if (typeof p.width === 'number' && typeof p.height === 'number') {
       this.width = p.width;
@@ -222,12 +325,20 @@ export class EditorSession {
       timestamp: r.timestamp,
       ops: [...r.ops],
     }));
+    this.axes = (p.axes ?? []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      slotId: a.slotId,
+      mode: a.mode,
+      cells: a.cells.map((c) => ({ id: c.id, name: c.name, sourceRevId: c.sourceRevId })),
+    }));
   }
 
   reset(): void {
     this.state = createInitialState(this.width, this.height);
     this.logger.clear();
     this.revisions = [];
+    this.axes = [];
     this.undoStack = [];
     this.redoStack = [];
   }
