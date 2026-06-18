@@ -1203,3 +1203,98 @@ button.active {
   font-size: 12px;
   margin-bottom: 8px;
 }
+
+/* ---- Variants（空間の読み / 差分行列） ---- */
+.float-variants {
+  min-width: 280px;
+}
+
+.var-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.var-new input[type='text'] {
+  flex: 1 1 120px;
+  min-width: 90px;
+}
+
+.var-axes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.var-axis {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 8px 10px 10px;
+}
+
+.var-axis-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.var-axis-name {
+  font-weight: 600;
+}
+
+.var-axis-spacer {
+  flex: 1 1 auto;
+}
+
+.var-cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.var-cell {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 4px;
+  cursor: pointer;
+  width: 80px;
+}
+
+.var-cell.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.var-cell-thumb {
+  display: block;
+  width: 72px;
+  height: 54px;
+  object-fit: contain;
+  background: repeating-conic-gradient(#3a3d46 0% 25%, #2f323a 0% 50%) 50% / 12px 12px;
+  border-radius: 3px;
+}
+
+.var-cell-name {
+  font-size: 11px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.var-cell-mark {
+  color: var(--accent);
+}
+
+.var-cell-src {
+  color: var(--muted);
+}

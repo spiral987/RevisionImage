@@ -1,11 +1,11 @@
-import type { Dag, EditorState, Operation, VariantAxis, VariantAxisMode, VariantCell } from './types';
+import type { Dag, EditorState, Operation, VariantAxis, VariantCell } from './types';
 import { applyOperation } from './engine/operation';
 import { createInitialState } from './engine/editorState';
 import './engine/operations'; // 操作ハンドラを登録
 import { Logger } from './backend/logger';
 import { buildDag } from './backend/dagBuilder';
 import { buildUnifiedDag, computeHeads, type CommittedRevision } from './backend/revision';
-import { selectionOps } from './backend/variant';
+import { selectionOps, slotChildren } from './backend/variant';
 import { genId } from './util/id';
 
 /**
@@ -68,10 +68,9 @@ export class EditorSession {
   }
 
   /**
-   * 複数 op を 1 回の undo 単位として適用する（空なら何もしない）。
-   * 例: セル選択（exclusive）は「旧セルを隠す＋新セルを表示」の複数 op になるが、
-   * ユーザの 1 操作なので 1 undo にまとめたい。snapshot を 1 度だけ積み、各 op を順に
-   * 逐次適用＋append するので不変条件 state === replay(log) は維持される。
+   * 複数 op を 1 回の undo 単位として適用する（空なら何もしない）。ユーザの 1 操作が
+   * 複数 op に展開されるとき（park/pull 等）に 1 undo へまとめる用途。snapshot を 1 度だけ
+   * 積み、各 op を順に逐次適用＋append するので不変条件 state === replay(log) は維持される。
    */
   applyBatch(ops: readonly Operation[]): EditorState {
     if (ops.length === 0) return this.state;
@@ -207,12 +206,11 @@ export class EditorSession {
   // CONCEPT §3.1 / §3.4。データモデルのみ（UI は別フェーズ）。
 
   /** 差し替え点(slotId)に対する空間軸を新規作成する。cells は空で始まる。 */
-  addAxis(name: string, slotId: string, mode: VariantAxisMode = 'exclusive'): VariantAxis {
+  addAxis(name: string, slotId: string): VariantAxis {
     const axis: VariantAxis = {
       id: genId('axis'),
       name: name && name.trim() ? name.trim() : `軸 ${this.axes.length + 1}`,
       slotId,
-      mode,
       cells: [],
     };
     this.axes.push(axis);
@@ -238,6 +236,31 @@ export class EditorSession {
     return true;
   }
 
+  /**
+   * 軸のセルを slot グループの現在の直下の子と同期する（差分制作のオーサリング導線）。
+   * slot 直下にあって未登録の子をセルに追加し、もう slot 直下に無いセルを除去する。
+   * 既存セルの順序・名前・sourceRevId は保つ。変化があれば true。
+   */
+  syncAxisCells(axisId: string): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis) return false;
+    const children = slotChildren(this.state, axis.slotId);
+    const childIds = new Set(children.map((c) => c.id));
+    let changed = false;
+    for (const c of children) {
+      if (!axis.cells.some((x) => x.id === c.id)) {
+        axis.cells.push({ id: c.id, name: c.name });
+        changed = true;
+      }
+    }
+    const kept = axis.cells.filter((x) => childIds.has(x.id));
+    if (kept.length !== axis.cells.length) {
+      axis.cells = kept;
+      changed = true;
+    }
+    return changed;
+  }
+
   removeCell(axisId: string, cellId: string): boolean {
     const axis = this.getAxis(axisId);
     if (!axis) return false;
@@ -261,19 +284,11 @@ export class EditorSession {
     return true;
   }
 
-  setAxisMode(axisId: string, mode: VariantAxisMode): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis || axis.mode === mode) return false;
-    axis.mode = mode;
-    return true;
-  }
-
   /**
-   * 軸のセルを選択する（exclusive=他を隠す / toggle=反転）。可視が変わるレイヤーへ
-   * setLayerVisibility を 1 undo 単位で適用する。可視構成が変わらなければ false。
+   * 軸のセルをトグル（表示/非表示を反転）する。可視が変わったら表示 op を適用して true。
    * 選択は表示 op としてログに残るので replay/commit 整合（差分切替が版に焼ける）。
    */
-  selectCell(axisId: string, cellId: string): boolean {
+  toggleCell(axisId: string, cellId: string): boolean {
     const axis = this.getAxis(axisId);
     if (!axis) return false;
     const ops = selectionOps(axis, this.state, cellId);
@@ -329,7 +344,6 @@ export class EditorSession {
       id: a.id,
       name: a.name,
       slotId: a.slotId,
-      mode: a.mode,
       cells: a.cells.map((c) => ({ id: c.id, name: c.name, sourceRevId: c.sourceRevId })),
     }));
   }

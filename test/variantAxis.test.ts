@@ -3,7 +3,11 @@ import '../src/engine/operations';
 import { EditorSession } from '../src/session';
 import { createInitialState, getNode } from '../src/engine/editorState';
 import { applyOperation } from '../src/engine/operation';
-import { selectedCellId } from '../src/backend/variant';
+import {
+  cellPreviewState,
+  slotChildren,
+  listGroups,
+} from '../src/backend/variant';
 import { serializeProject } from '../src/backend/repository';
 import {
   createAddLayerOp,
@@ -29,21 +33,17 @@ const visible = (s: EditorSession, id: string) => getNode(s.state, id)!.visible;
  * slot グループ「slot」配下に 3 つのセルレイヤー(cellA/B/C)を持つ文書を作り、
  * それらを束ねる空間軸を 1 つ登録したセッションを返す。
  */
-function buildAxisSession(mode: VariantAxis['mode'] = 'exclusive'): {
-  s: EditorSession;
-  axis: VariantAxis;
-} {
+function buildAxisSession(): { s: EditorSession; axis: VariantAxis } {
   const s = new EditorSession(W, H);
   for (const id of ['cellA', 'cellB', 'cellC']) {
     s.apply(createAddLayerOp(id, id, W, H));
   }
   s.apply(createAddGroupOp('slot', '差し替え点'));
-  // 3 セルを slot グループに入れる。
   s.apply(createMoveNodeOp('cellA', 'slot', 0));
   s.apply(createMoveNodeOp('cellB', 'slot', 1));
   s.apply(createMoveNodeOp('cellC', 'slot', 2));
 
-  const axis = s.addAxis('目', 'slot', mode);
+  const axis = s.addAxis('目', 'slot');
   s.addCell(axis.id, { id: 'cellA', name: '目A' });
   s.addCell(axis.id, { id: 'cellB', name: '目B' });
   s.addCell(axis.id, { id: 'cellC', name: '目C' });
@@ -51,63 +51,50 @@ function buildAxisSession(mode: VariantAxis['mode'] = 'exclusive'): {
 }
 
 describe('空間軸（Variants）データモデル', () => {
-  it('exclusive: セル選択でちょうど1つだけ表示になる', () => {
-    const { s, axis } = buildAxisSession('exclusive');
-    expect(s.selectCell(axis.id, 'cellB')).toBe(true);
-    expect(visible(s, 'cellA')).toBe(false);
-    expect(visible(s, 'cellB')).toBe(true);
-    expect(visible(s, 'cellC')).toBe(false);
-    expect(selectedCellId(axis, s.state)).toBe('cellB');
-
-    // 別セルへ切替: ちょうど 1 つに保たれる。
-    expect(s.selectCell(axis.id, 'cellC')).toBe(true);
-    expect([visible(s, 'cellA'), visible(s, 'cellB'), visible(s, 'cellC')]).toEqual([
-      false,
-      false,
-      true,
-    ]);
-
-    // 既に選択中のセルを再選択しても可視構成は変わらない（op を出さない）。
-    expect(s.selectCell(axis.id, 'cellC')).toBe(false);
-  });
-
-  it('toggle: 各セルを独立に表示反転する（他セルは不変）', () => {
-    const { s, axis } = buildAxisSession('toggle');
+  it('toggleCell: 各セルを独立に表示反転する（他セルは不変）', () => {
+    const { s, axis } = buildAxisSession();
     // 初期は全可視。cellA をトグル → cellA だけ非表示、他は不変。
-    expect(s.selectCell(axis.id, 'cellA')).toBe(true);
+    expect(s.toggleCell(axis.id, 'cellA')).toBe(true);
     expect([visible(s, 'cellA'), visible(s, 'cellB'), visible(s, 'cellC')]).toEqual([
       false,
       true,
       true,
     ]);
-    // もう一度トグル → 戻る。
-    expect(s.selectCell(axis.id, 'cellA')).toBe(true);
+    // cellB もトグル → 2 つ非表示（独立）。
+    expect(s.toggleCell(axis.id, 'cellB')).toBe(true);
+    expect([visible(s, 'cellA'), visible(s, 'cellB'), visible(s, 'cellC')]).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    // cellA を再トグル → 戻る。
+    expect(s.toggleCell(axis.id, 'cellA')).toBe(true);
     expect(visible(s, 'cellA')).toBe(true);
   });
 
-  it('選択 op は replay 整合（state === replay(log)）を保つ', () => {
-    const { s, axis } = buildAxisSession('exclusive');
-    s.selectCell(axis.id, 'cellB');
-    s.selectCell(axis.id, 'cellA');
+  it('トグル op は replay 整合（state === replay(log)）を保つ', () => {
+    const { s, axis } = buildAxisSession();
+    s.toggleCell(axis.id, 'cellB');
+    s.toggleCell(axis.id, 'cellA');
     expect(statesEqual(s.state, replay(s))).toBe(true);
   });
 
-  it('1 回の選択は 1 undo にまとまる（exclusive の複数 op でも）', () => {
-    const { s, axis } = buildAxisSession('exclusive');
+  it('1 回のトグルは 1 undo で戻る', () => {
+    const { s, axis } = buildAxisSession();
     const before = s.state;
-    s.selectCell(axis.id, 'cellB'); // hide A + hide C = 2 op だが 1 undo 単位
+    s.toggleCell(axis.id, 'cellB');
     expect(s.undo()).toBe(true);
     expect(statesEqual(s.state, before)).toBe(true);
   });
 
   it('軸に属さないセル / 不明な軸は無視する', () => {
-    const { s, axis } = buildAxisSession('exclusive');
-    expect(s.selectCell(axis.id, 'no-such-cell')).toBe(false);
-    expect(s.selectCell('no-such-axis', 'cellA')).toBe(false);
+    const { s, axis } = buildAxisSession();
+    expect(s.toggleCell(axis.id, 'no-such-cell')).toBe(false);
+    expect(s.toggleCell('no-such-axis', 'cellA')).toBe(false);
   });
 
-  it('addCell は冪等（同じ nodeId は重複登録しない）/ remove / reorder / mode', () => {
-    const { s, axis } = buildAxisSession('exclusive');
+  it('addCell は冪等（同じ nodeId は重複登録しない）/ remove / reorder', () => {
+    const { s, axis } = buildAxisSession();
     expect(s.addCell(axis.id, { id: 'cellA', name: 'dup' })).toBe(false);
     expect(s.getAxis(axis.id)!.cells.map((c) => c.id)).toEqual(['cellA', 'cellB', 'cellC']);
 
@@ -117,16 +104,12 @@ describe('空間軸（Variants）データモデル', () => {
     expect(s.removeCell(axis.id, 'cellA')).toBe(true);
     expect(s.getAxis(axis.id)!.cells.map((c) => c.id)).toEqual(['cellC', 'cellB']);
 
-    expect(s.setAxisMode(axis.id, 'toggle')).toBe(true);
-    expect(s.getAxis(axis.id)!.mode).toBe('toggle');
-    expect(s.setAxisMode(axis.id, 'toggle')).toBe(false); // 変化なし
-
     expect(s.removeAxis(axis.id)).toBe(true);
     expect(s.axes.length).toBe(0);
   });
 
   it('JSON 往復で axes が保たれる（sourceRevId 含む）', () => {
-    const { s, axis } = buildAxisSession('exclusive');
+    const { s, axis } = buildAxisSession();
     s.addCell(axis.id, { id: 'cellD', name: '目D（過去版由来）', sourceRevId: 'rev-xyz' });
 
     const json = JSON.parse(
@@ -147,18 +130,58 @@ describe('空間軸（Variants）データモデル', () => {
     const a = restored.axes[0];
     expect(a.name).toBe('目');
     expect(a.slotId).toBe('slot');
-    expect(a.mode).toBe('exclusive');
     expect(a.cells.map((c) => c.id)).toEqual(['cellA', 'cellB', 'cellC', 'cellD']);
     expect(a.cells.find((c) => c.id === 'cellD')!.sourceRevId).toBe('rev-xyz');
   });
 
   it('reset / loadProject(axes 省略) は axes を空にする', () => {
-    const { s } = buildAxisSession('exclusive');
+    const { s } = buildAxisSession();
     s.reset();
     expect(s.axes.length).toBe(0);
 
-    const { s: s2 } = buildAxisSession('exclusive');
+    const { s: s2 } = buildAxisSession();
     s2.loadProject({ log: [], revisions: [] }); // axes 省略
     expect(s2.axes.length).toBe(0);
+  });
+});
+
+describe('空間軸（Variants）オーサリング & プレビュー', () => {
+  it('syncAxisCells: slot 直下の子をセルに取り込み、外れた子は落とす', () => {
+    const s = new EditorSession(W, H);
+    for (const id of ['cellA', 'cellB']) s.apply(createAddLayerOp(id, id, W, H));
+    s.apply(createAddGroupOp('slot', 'slot'));
+    s.apply(createMoveNodeOp('cellA', 'slot', 0));
+    s.apply(createMoveNodeOp('cellB', 'slot', 1));
+
+    const axis = s.addAxis('目', 'slot'); // cells は空
+    expect(axis.cells.length).toBe(0);
+    expect(s.syncAxisCells(axis.id)).toBe(true);
+    expect(s.getAxis(axis.id)!.cells.map((c) => c.id)).toEqual(['cellA', 'cellB']);
+    // 変化が無ければ false
+    expect(s.syncAxisCells(axis.id)).toBe(false);
+
+    // cellA を slot の外へ出す → 同期でセルから落ちる。
+    s.apply(createMoveNodeOp('cellA', null, 0));
+    expect(s.syncAxisCells(axis.id)).toBe(true);
+    expect(s.getAxis(axis.id)!.cells.map((c) => c.id)).toEqual(['cellB']);
+  });
+
+  it('cellPreviewState: slot 内で対象セルだけ可視・他は不可視（state は不変）', () => {
+    const { s, axis } = buildAxisSession();
+    const before = s.state;
+    const preview = cellPreviewState(s.state, axis, 'cellB');
+    expect(getNode(preview, 'cellA')!.visible).toBe(false);
+    expect(getNode(preview, 'cellB')!.visible).toBe(true);
+    expect(getNode(preview, 'cellC')!.visible).toBe(false);
+    expect(getNode(preview, 'slot')!.visible).toBe(true);
+    // 元 state は変更されない（純関数）。
+    expect(s.state).toBe(before);
+    expect(getNode(s.state, 'cellA')!.visible).toBe(true);
+  });
+
+  it('slotChildren / listGroups がツリーから候補を返す', () => {
+    const { s } = buildAxisSession();
+    expect(slotChildren(s.state, 'slot').map((c) => c.id)).toEqual(['cellA', 'cellB', 'cellC']);
+    expect(listGroups(s.state).map((g) => g.id)).toContain('slot');
   });
 });

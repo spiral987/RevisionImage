@@ -72,13 +72,6 @@ export interface Revision {
 // 詳細・設計の根拠は docs/mds/PLAN.md §2。
 
 /**
- * 軸のセル選択モード。
- * - exclusive: 択一（目6種から1つ）。選んだセルだけ表示、他セルは非表示。
- * - toggle:    独立トグル（トップス/ボトムスの on/off）。各セルを独立に表示反転。
- */
-export type VariantAxisMode = 'exclusive' | 'toggle';
-
-/**
  * 軸に属する1つの別案（セル）。実体は slot（差し替え点）配下の兄弟ノード。
  * id はそのノードの id（Layer または LayerGroup）に一致する。セル切替＝この id の
  * 表示/非表示なので、差分切替は既存の setLayerVisibility 操作で決定的に表現できる。
@@ -99,8 +92,7 @@ export interface VariantAxis {
   id: string;
   name: string;
   slotId: string; // 差し替え点 = base ツリー上の Layer/Group id
-  mode: VariantAxisMode;
-  cells: VariantCell[]; // 順序付きセル一覧
+  cells: VariantCell[]; // 順序付きセル一覧。各セルは独立にトグル（表示/非表示）する。
 }
 
 // --- エンジン状態 -----------------------------------------------------------

@@ -1,42 +1,66 @@
 import type { EditorState, Operation, VariantAxis } from '../types';
-import { getNode } from '../engine/editorState';
+import { getNode, updateNode } from '../engine/editorState';
+import { isGroup } from '../engine/layer';
 import { createSetLayerVisibilityOp } from '../engine/operations/layerOps';
 
 // 空間軸（Variants）のロジック。React/DOM に依存しない純TS（テスト可能）。
 // CONCEPT.md §3.1 / PLAN.md §2.3。
 
 /**
- * 軸のセル選択を「表示/非表示 op 列」に変換する純関数。
- *
- * - exclusive: cellId のセルだけ visible=true、同じ軸の他セルは visible=false。
- * - toggle:    cellId のセルの現在の可視状態を反転（他セルは不変）。
- *
- * 既に目的の可視状態のノードには op を出さない（冗長 op を避け、consolidate を汚さない）。
+ * 軸のセルをトグル（表示/非表示を反転）する op を返す純関数。各セルは独立に on/off する
+ * （択一モードは廃止。N択1が要るときは将来 solo 操作として非モーダルに足す）。
  * 木に存在しない id・軸に属さない cellId は無視する。返す op は setLayerVisibility（klass=edit）
  * なので replay 整合（state === replay(log)）を保つ。
  */
 export function selectionOps(axis: VariantAxis, state: EditorState, cellId: string): Operation[] {
   if (!axis.cells.some((c) => c.id === cellId)) return []; // 軸に属さないセルは無視
-  const ops: Operation[] = [];
-  const want = (id: string, visible: boolean) => {
-    const node = getNode(state, id);
-    if (!node || node.visible === visible) return; // 不在 or 既に目的状態なら op 不要
-    ops.push(createSetLayerVisibilityOp(id, visible));
-  };
-  if (axis.mode === 'exclusive') {
-    for (const cell of axis.cells) want(cell.id, cell.id === cellId);
-  } else {
-    const target = getNode(state, cellId);
-    if (target) want(cellId, !target.visible);
-  }
-  return ops;
+  const target = getNode(state, cellId);
+  if (!target) return [];
+  return [createSetLayerVisibilityOp(cellId, !target.visible)];
 }
 
-/** 軸の現在の選択セル（exclusive 用）。可視なセルの先頭 id。無ければ null。 */
-export function selectedCellId(axis: VariantAxis, state: EditorState): string | null {
+/**
+ * セルのサムネイル用に「slot 内でこのセルだけ表示」した state を返す（合成文脈込み）。
+ * 軸の他セルは非表示にし、slot 自体は可視にする。base（slot 以外）は現状のまま。
+ * CONCEPT §4.2-1（セルは単独でなく合成順・合成文脈込みで見せる）への対応。state は変更せず複製を返す。
+ */
+export function cellPreviewState(
+  state: EditorState,
+  axis: VariantAxis,
+  cellId: string,
+): EditorState {
+  let st = state;
+  const slot = getNode(st, axis.slotId);
+  if (slot && !slot.visible) st = updateNode(st, axis.slotId, (n) => ({ ...n, visible: true }));
   for (const cell of axis.cells) {
-    const node = getNode(state, cell.id);
-    if (node?.visible) return cell.id;
+    const want = cell.id === cellId;
+    const node = getNode(st, cell.id);
+    if (node && node.visible !== want) st = updateNode(st, cell.id, (n) => ({ ...n, visible: want }));
   }
-  return null;
+  return st;
+}
+
+/** slot グループ直下の子（セル候補）を返す。slot がグループでなければ空。 */
+export function slotChildren(
+  state: EditorState,
+  slotId: string,
+): { id: string; name: string; isGroup: boolean }[] {
+  const node = getNode(state, slotId);
+  if (!node || !isGroup(node)) return [];
+  return node.children.map((c) => ({ id: c.id, name: c.name, isGroup: isGroup(c) }));
+}
+
+/** 軸の差し替え点に使えるグループ一覧（ツリー内の全グループ。depth はインデント表示用）。 */
+export function listGroups(state: EditorState): { id: string; name: string; depth: number }[] {
+  const out: { id: string; name: string; depth: number }[] = [];
+  const walk = (nodes: EditorState['layers'], depth: number) => {
+    for (const n of nodes) {
+      if (isGroup(n)) {
+        out.push({ id: n.id, name: n.name, depth });
+        walk(n.children, depth + 1);
+      }
+    }
+  };
+  walk(state.layers, 0);
+  return out;
 }

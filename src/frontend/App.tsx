@@ -14,6 +14,7 @@ import { CanvasEditor } from './CanvasEditor';
 import { RevGView } from './RevGView';
 import { DiffView } from './DiffView';
 import { MergeView } from './MergeView';
+import { VariantsView } from './VariantsView';
 import { FloatWindow, Section } from './Float';
 
 const SIZE_PRESETS: [number, number][] = [
@@ -460,6 +461,18 @@ export function App() {
             onDeleteRevision={(rev) => deleteRev(rev)}
           />
         </section>
+      </FloatWindow>
+
+      {/* 空間の読み（差分制作）: 軸×セルの行列。時間の読み（Revisions）とは別ウインドウ。 */}
+      <FloatWindow
+        id="nrc-variants"
+        title="Variants / 差分"
+        defaultPos={{ right: 12, bottom: 12 }}
+        className="float-variants"
+      >
+        <Section title="VARIANTS" defaultOpen>
+          <VariantsView session={session} version={version} onEdit={onEdit} />
+        </Section>
       </FloatWindow>
 
       {diffPair && (
