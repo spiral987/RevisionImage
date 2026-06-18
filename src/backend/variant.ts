@@ -1,6 +1,8 @@
-import type { EditorState, Operation, VariantAxis } from '../types';
+import type { EditorState, ImageBuffer, Operation, VariantAxis } from '../types';
 import { getNode, updateNode } from '../engine/editorState';
-import { isGroup } from '../engine/layer';
+import { isGroup, layerContentBBox } from '../engine/layer';
+import { flattenState } from '../engine/composite';
+import { cropBuffer } from '../engine/imageBuffer';
 import { createSetLayerVisibilityOp } from '../engine/operations/layerOps';
 
 // 空間軸（Variants）のロジック。React/DOM に依存しない純TS（テスト可能）。
@@ -48,6 +50,38 @@ export function slotChildren(
   const node = getNode(state, slotId);
   if (!node || !isGroup(node)) return [];
   return node.children.map((c) => ({ id: c.id, name: c.name, isGroup: isGroup(c) }));
+}
+
+/**
+ * slot グループの「現在の見た目（合成結果）」を内容 bbox で切り出した素材ピースとして返す。
+ * park（退避）で使う: 現在 slot に見えているものを 1 枚のスナップショットに焼く。
+ * slot 自身とその子の現在の可視/不透明度を尊重して合成する。空なら null。
+ */
+export function slotPiece(
+  state: EditorState,
+  slotId: string,
+): { buffer: ImageBuffer; x: number; y: number } | null {
+  const node = getNode(state, slotId);
+  if (!node) return null;
+  // slot サブツリーだけを合成対象にした一時 state（base=透明）。
+  const sub: EditorState = {
+    width: state.width,
+    height: state.height,
+    layers: [node],
+    activeLayerId: state.activeLayerId,
+  };
+  const flat = flattenState(sub, { background: [0, 0, 0, 0] });
+  const bbox = layerContentBBox({
+    id: '',
+    name: '',
+    buffer: flat,
+    offsetX: 0,
+    offsetY: 0,
+    visible: true,
+    opacity: 1,
+  });
+  if (bbox.w <= 0 || bbox.h <= 0) return null;
+  return { buffer: cropBuffer(flat, bbox.x, bbox.y, bbox.w, bbox.h), x: bbox.x, y: bbox.y };
 }
 
 /** 軸の差し替え点に使えるグループ一覧（ツリー内の全グループ。depth はインデント表示用）。 */

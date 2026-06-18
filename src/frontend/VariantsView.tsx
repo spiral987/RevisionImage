@@ -119,6 +119,15 @@ export function VariantsView({
                     </select>
                   )}
                   <button
+                    title="現在の見た目を別案セルへ退避し、作業ビューをクリア（非破壊・引き戻し可）"
+                    onClick={() => {
+                      session.parkSlot(axis.id);
+                      onEdit();
+                    }}
+                  >
+                    ⇩ 退避
+                  </button>
+                  <button
                     title="slot フォルダの中身とセルを同期する"
                     onClick={() => {
                       session.syncAxisCells(axis.id);

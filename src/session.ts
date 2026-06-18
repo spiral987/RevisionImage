@@ -16,7 +16,7 @@ import {
   revisionPiece,
   type CommittedRevision,
 } from './backend/revision';
-import { selectionOps, slotChildren } from './backend/variant';
+import { selectionOps, slotChildren, slotPiece } from './backend/variant';
 import { genId } from './util/id';
 
 /**
@@ -328,6 +328,37 @@ export class EditorSession {
       createSetLayerVisibilityOp(layerId, false), // 初期は非表示
     ]);
     this.addCell(axisId, { id: layerId, name: rev.label, sourceRevId: rev.id });
+    return true;
+  }
+
+  /**
+   * park（退避, CONCEPT §3.4）: 現在の slot の見た目を 1 枚のスナップショットに焼いて
+   * 新しい別案セルとして構造へ送り、作業ビューをクリアする（＝作業スタックが軽くなる）。
+   * 非破壊: 元の子は削除せず非表示にするだけ。退避セルも初期は非表示で、Variants でトグルすれば
+   * いつでも引き戻せる（pull）。slot に見えるものが無ければ false。
+   */
+  parkSlot(axisId: string): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis) return false;
+    const slot = getNode(this.state, axis.slotId);
+    if (!slot || !isGroup(slot)) return false;
+    const piece = slotPiece(this.state, axis.slotId);
+    if (!piece) return false; // 見えているものが無い
+    const layerId = genId('layer');
+    const name = `退避 ${axis.cells.length + 1}`;
+    const ops: Operation[] = [];
+    // 現在見えている slot 直下の子を非表示にして作業ビューを空にする（非破壊）。
+    for (const child of slot.children) {
+      if (child.visible) ops.push(createSetLayerVisibilityOp(child.id, false));
+    }
+    // 焼いたスナップショットを slot 内の隠しレイヤーとして足す。
+    ops.push(
+      createAddImageLayerOp(layerId, name, piece.buffer, piece.x, piece.y, this.width, this.height),
+    );
+    ops.push(createMoveNodeOp(layerId, axis.slotId, 1e9));
+    ops.push(createSetLayerVisibilityOp(layerId, false));
+    this.applyBatch(ops);
+    this.addCell(axisId, { id: layerId, name });
     return true;
   }
 

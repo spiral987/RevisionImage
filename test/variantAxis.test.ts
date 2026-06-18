@@ -230,3 +230,46 @@ describe('層2: 時間→空間の昇格（addRevisionAsCell）', () => {
     expect(s.addRevisionAsCell(leafAxis.id, rev)).toBe(false);
   });
 });
+
+describe('層2: park（退避）', () => {
+  const P = { color: [200, 60, 10] as [number, number, number], size: 4, opacity: 1 };
+
+  /** slot 内に1枚レイヤーを置き、そこに描画した文書 + 軸を作る。 */
+  function buildDrawnSlot() {
+    const s = new EditorSession(W, H);
+    s.apply(createAddGroupOp('slot', 'slot'));
+    s.apply(createAddLayerOp('cellA', 'cellA', W, H));
+    s.apply(createMoveNodeOp('cellA', 'slot', 0));
+    s.apply(createBrushOp('cellA', line(2, 2, 12, 12, 5), P, W, H));
+    const axis = s.addAxis('目', 'slot');
+    s.syncAxisCells(axis.id);
+    return { s, axis };
+  }
+
+  it('現在の見た目を退避セルにし、作業ビューをクリアする（非破壊・replay整合・引き戻し可）', () => {
+    const { s, axis } = buildDrawnSlot();
+    expect(getNode(s.state, 'cellA')!.visible).toBe(true);
+
+    expect(s.parkSlot(axis.id)).toBe(true);
+    // 元の子は削除されず非表示（非破壊）。
+    expect(getNode(s.state, 'cellA')!.visible).toBe(false);
+    // 退避スナップショットが隠しセルとして増える（出自なし）。
+    const cells = s.getAxis(axis.id)!.cells;
+    expect(cells.length).toBe(2);
+    const parked = cells[cells.length - 1];
+    expect(parked.sourceRevId).toBeUndefined();
+    expect(getNode(s.state, parked.id)!.visible).toBe(false);
+    expect(slotChildren(s.state, 'slot').map((c) => c.id)).toContain(parked.id);
+    // 取り込みも操作ログに残り replay 整合。
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+    // pull（引き戻し）= トグルで表示。
+    expect(s.toggleCell(axis.id, parked.id)).toBe(true);
+    expect(getNode(s.state, parked.id)!.visible).toBe(true);
+  });
+
+  it('slot に見えるものが無ければ false', () => {
+    const { s, axis } = buildDrawnSlot();
+    s.toggleCell(axis.id, 'cellA'); // cellA を隠す → 見えるもの無し
+    expect(s.parkSlot(axis.id)).toBe(false);
+  });
+});
