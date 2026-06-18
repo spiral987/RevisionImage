@@ -997,7 +997,12 @@ export function CanvasEditor({
       setSize(Math.round(d.startSize + (d.startY - e.clientY) * SIZE_DRAG_FACTOR));
       return;
     }
-    if (showCursor) moveCursor(e.clientX, e.clientY);
+    if (showCursor) {
+      moveCursor(e.clientX, e.clientY);
+      // pointerEnter を取りこぼして hovering が false で固まっても、移動で表示を自己回復する
+      // （setPointerCapture 解放時などに spurious な pointerLeave が出てカーソルが消える対策）。
+      if (!hovering) setHovering(true);
+    }
     // Transform ツールのホバー: 位置に応じてカーソルを変える（再レンダーを避け DOM 直接更新）。
     if (tool === 'transform' && !xformRef.current && !previewing) {
       const c = canvasRef.current;
@@ -1402,6 +1407,13 @@ export function CanvasEditor({
     dragIdRef.current = n.id;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', n.id);
+    // ドラッグ画像を「行全体」にして、つかんだ位置のままマウスに追従させる
+    // （既定だとドラッグ可能要素＝小さな ⠿ グリップだけが追従して分かりにくい）。
+    const head = (e.currentTarget as HTMLElement).closest('.layer-head') as HTMLElement | null;
+    if (head) {
+      const rect = head.getBoundingClientRect();
+      e.dataTransfer.setDragImage(head, e.clientX - rect.left, e.clientY - rect.top);
+    }
   };
 
   const clearDrag = () => {
