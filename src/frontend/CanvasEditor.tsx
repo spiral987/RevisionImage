@@ -1,9 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type {
-  MutableRefObject,
-  PointerEvent as ReactPointerEvent,
-  DragEvent as ReactDragEvent,
-} from 'react';
+import type { MutableRefObject, PointerEvent as ReactPointerEvent } from 'react';
 import type {
   BBox,
   Dag,
@@ -213,6 +209,8 @@ export function CanvasEditor({
   const sizeDragRef = useRef<{ startY: number; startSize: number } | null>(null);
   // レイヤーパネルの D&D 並べ替えでドラッグ中のノード id。
   const dragIdRef = useRef<string | null>(null);
+  // ドラッグ中に pointer へ追従する半透明ゴースト要素。
+  const ghostRef = useRef<HTMLDivElement>(null);
 
   const [tool, setTool] = useState<Tool>('brush');
   const [sizeAdjust, setSizeAdjust] = useState(false); // S キー押下中 = 太さ調整モード
@@ -236,6 +234,8 @@ export function CanvasEditor({
   const [dropHint, setDropHint] = useState<{ id: string; pos: 'above' | 'below' | 'into' } | null>(
     null,
   );
+  // ドラッグ中ゴーストに表示するレイヤー名（null = 非ドラッグ）。
+  const [dragGhost, setDragGhost] = useState<{ name: string } | null>(null);
   // ドラッグ中の不透明度プレビュー（再レンダーを介さず合成へ反映するため ref）。
   const opacityPreviewRef = useRef<{ layerId: string; opacity: number } | null>(null);
 
@@ -1402,35 +1402,46 @@ export function CanvasEditor({
   };
 
   // ---- レイヤーの D&D（並べ替え / フォルダ出し入れ）。▲▼ ボタンと 📁→ 選択の代替。 ----
+  // ネイティブ HTML5 D&D はマウス専用でペン/タッチで発火しないため、pointer イベントで自作する。
   // 表示は上=最前面で逆順描画するので、視覚上の「above（上）」は配列では index 大（後ろ）になる。
-  const onDragStartNode = (n: LayerNode, e: ReactDragEvent) => {
-    dragIdRef.current = n.id;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', n.id);
-    // ドラッグ画像を「レイヤーを表すカード矩形全体」にして、つかんだ位置のままマウスに追従させる
-    // （既定だとドラッグ可能要素＝小さな ⠿ グリップだけが追従して分かりにくい）。
-    const card = (e.currentTarget as HTMLElement).closest('.layer-item') as HTMLElement | null;
-    if (card) {
-      const rect = card.getBoundingClientRect();
-      e.dataTransfer.setDragImage(card, e.clientX - rect.left, e.clientY - rect.top);
+
+  // 追従する半透明ゴーストを pointer 位置へ移動（再レンダーを避け DOM 直接更新）。
+  const positionGhost = (clientX: number, clientY: number) => {
+    const g = ghostRef.current;
+    if (g) {
+      g.style.left = `${clientX + 12}px`;
+      g.style.top = `${clientY + 8}px`;
     }
   };
 
-  const clearDrag = () => {
-    dragIdRef.current = null;
-    setDropHint(null);
+  const onGripPointerDown = (n: LayerNode, e: ReactPointerEvent) => {
+    if (previewing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragIdRef.current = n.id;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    positionGhost(e.clientX, e.clientY);
+    setDragGhost({ name: n.name });
   };
 
-  const onNodeDragOver = (n: LayerNode, e: ReactDragEvent) => {
+  // pointer 位置の直下にあるレイヤー行を判定し、上/中/下のドロップ位置ヒントを更新する。
+  const onGripPointerMove = (e: ReactPointerEvent) => {
     const dragged = dragIdRef.current;
-    if (!dragged || dragged === n.id) return;
+    if (!dragged) return;
+    positionGhost(e.clientX, e.clientY);
+    const head = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest(
+      '.layer-head',
+    ) as HTMLElement | null;
+    const targetId = head?.dataset.id;
+    const tn = targetId ? getNode(session.state, targetId) : undefined;
     const dn = getNode(session.state, dragged);
-    if (dn && collectNodeIds(dn).includes(n.id)) return; // 自分の子孫へは不可
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const rect = e.currentTarget.getBoundingClientRect();
+    if (!head || !targetId || !tn || targetId === dragged || (dn && collectNodeIds(dn).includes(targetId))) {
+      setDropHint((p) => (p ? null : p));
+      return;
+    }
+    const rect = head.getBoundingClientRect();
     const r = (e.clientY - rect.top) / Math.max(1, rect.height);
-    const pos: 'above' | 'below' | 'into' = isGroup(n)
+    const pos: 'above' | 'below' | 'into' = isGroup(tn)
       ? r < 0.28
         ? 'above'
         : r > 0.72
@@ -1439,38 +1450,51 @@ export function CanvasEditor({
       : r < 0.5
         ? 'above'
         : 'below';
-    setDropHint((p) => (p && p.id === n.id && p.pos === pos ? p : { id: n.id, pos }));
+    setDropHint((p) => (p && p.id === targetId && p.pos === pos ? p : { id: targetId, pos }));
   };
 
-  const onNodeDrop = (n: LayerNode, e: ReactDragEvent) => {
-    e.preventDefault();
-    e.stopPropagation(); // パネル余白(ul)へのドロップと二重発火させない
+  const onGripPointerUp = (e: ReactPointerEvent) => {
     const dragged = dragIdRef.current;
     const hint = dropHint;
-    clearDrag();
-    if (previewing || !dragged || dragged === n.id || !hint || hint.id !== n.id) return;
-    const dn = getNode(session.state, dragged);
-    if (!dn || collectNodeIds(dn).includes(n.id)) return; // 子孫へは不可
-    if (hint.pos === 'into') {
-      session.apply(createMoveNodeOp(dragged, n.id, Number.MAX_SAFE_INTEGER)); // フォルダ先頭(最前面)へ
-    } else {
-      const info = getParentInfo(session.state, n.id);
-      if (!info) return;
-      const from = getParentInfo(session.state, dragged);
-      const sameParent = from && from.parentId === info.parentId ? from.index : null;
-      session.apply(createMoveNodeOp(dragged, info.parentId, reorderIndex(hint.pos, info.index, sameParent)));
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* 既に解放済み */
     }
-    onEdit();
-    repaint();
+    dragIdRef.current = null;
+    setDragGhost(null);
+    setDropHint(null);
+    if (previewing || !dragged) return;
+    if (hint) {
+      performDrop(dragged, hint.id, hint.pos);
+    } else {
+      // 行(.layer-head)の上でなく、レイヤーリストの余白で離したときだけ最上位の最前面へ（フォルダから
+      // 出す手段）。行上でのリリース（＝動かさずクリックした場合含む）は no-op にする。
+      const over = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (over && !over.closest('.layer-head') && over.closest('.layer-list') && getNode(session.state, dragged)) {
+        session.apply(createMoveNodeOp(dragged, null, Number.MAX_SAFE_INTEGER));
+        onEdit();
+        repaint();
+      }
+    }
   };
 
-  // パネル余白へのドロップ = 最上位の最前面へ（フォルダから出す手段）。
-  const onListDrop = (e: ReactDragEvent) => {
-    e.preventDefault();
-    const dragged = dragIdRef.current;
-    clearDrag();
-    if (previewing || !dragged || !getNode(session.state, dragged)) return;
-    session.apply(createMoveNodeOp(dragged, null, Number.MAX_SAFE_INTEGER));
+  const performDrop = (draggedId: string, targetId: string, pos: 'above' | 'below' | 'into') => {
+    if (previewing || draggedId === targetId) return;
+    const dn = getNode(session.state, draggedId);
+    const tn = getNode(session.state, targetId);
+    if (!dn || !tn || collectNodeIds(dn).includes(targetId)) return; // 子孫へは不可
+    if (pos === 'into') {
+      session.apply(createMoveNodeOp(draggedId, targetId, Number.MAX_SAFE_INTEGER)); // フォルダ先頭(最前面)へ
+    } else {
+      const info = getParentInfo(session.state, targetId);
+      if (!info) return;
+      const from = getParentInfo(session.state, draggedId);
+      const sameParent = from && from.parentId === info.parentId ? from.index : null;
+      session.apply(
+        createMoveNodeOp(draggedId, info.parentId, reorderIndex(pos, info.index, sameParent)),
+      );
+    }
     onEdit();
     repaint();
   };
@@ -1544,18 +1568,14 @@ export function CanvasEditor({
     const dropCls = dropHint?.id === n.id ? ` drop-${dropHint.pos}` : '';
     return (
       <li key={n.id} className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''}${dropCls}`}>
-        <div
-          className="layer-head"
-          style={{ paddingLeft: 4 + depth * 12 }}
-          onDragOver={(e) => onNodeDragOver(n, e)}
-          onDrop={(e) => onNodeDrop(n, e)}
-        >
+        <div className="layer-head" data-id={n.id} style={{ paddingLeft: 4 + depth * 12 }}>
           <span
             className="layer-grip"
-            draggable={!previewing && !editing}
             title="ドラッグで並べ替え / フォルダへ出し入れ"
-            onDragStart={(e) => onDragStartNode(n, e)}
-            onDragEnd={clearDrag}
+            onPointerDown={(e) => onGripPointerDown(n, e)}
+            onPointerMove={onGripPointerMove}
+            onPointerUp={onGripPointerUp}
+            onPointerCancel={onGripPointerUp}
           >
             ⠿
           </span>
@@ -1733,6 +1753,11 @@ export function CanvasEditor({
         {sizeAdjust && <span className="brush-cursor-label">{size}px</span>}
       </div>
 
+      {/* レイヤー D&D 中に pointer へ追従する半透明ゴースト（マウス/ペン/タッチ共通）。 */}
+      <div ref={ghostRef} className="layer-drag-ghost" style={{ display: dragGhost ? 'block' : 'none' }}>
+        {dragGhost?.name}
+      </div>
+
       {previewing && (
         <div className="preview-banner">
           履歴を閲覧中（読み取り専用）— step {histIndex}/{log.length}
@@ -1898,11 +1923,15 @@ export function CanvasEditor({
             <button onClick={addLayer} disabled={previewing}>
               + Layer
             </button>
-            <button onClick={addFolder} disabled={previewing} title="空のフォルダを追加">
+            <button onClick={addFolder} disabled={previewing} title="空のフォルダを最上位に追加">
               + Folder
             </button>
-            <button onClick={groupActiveLayer} disabled={previewing} title="アクティブレイヤーをフォルダに包む">
-              Group
+            <button
+              onClick={groupActiveLayer}
+              disabled={previewing}
+              title="アクティブレイヤーを新規フォルダで包む（中身入りフォルダを一発で作る）"
+            >
+              Wrap
             </button>
             <button onClick={() => imageInputRef.current?.click()} disabled={previewing}>
               Import
@@ -1951,19 +1980,13 @@ export function CanvasEditor({
               </div>
             );
           })()}
-          <ul
-            className="layer-list"
-            onDragOver={(e) => {
-              if (dragIdRef.current) e.preventDefault();
-            }}
-            onDrop={onListDrop}
-          >
+          <ul className="layer-list">
             {session.state.layers
               .slice()
               .reverse()
               .map((n) => renderNode(n, 0, session.state.layers))}
           </ul>
-          <p className="hint">⠿ をドラッグで並べ替え。フォルダの中央に落とすと収納、余白に落とすと最上位へ。</p>
+          <p className="hint">⠿ をドラッグで並べ替え（ペン/タッチ可）。フォルダの中央に落とすと収納、余白に落とすと最上位へ。</p>
         </Section>
 
         <Section title={`LOG (${log.length})`} defaultOpen={false}>

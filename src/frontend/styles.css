@@ -628,13 +628,32 @@ button.active {
   cursor: grab;
   color: var(--muted);
   letter-spacing: -2px;
-  padding: 0 1px;
+  padding: 0 3px;
   user-select: none;
   flex: none;
+  touch-action: none; /* ペン/タッチで pointermove を奪われない（スクロール化を防ぐ） */
 }
 
 .layer-grip:active {
   cursor: grabbing;
+}
+
+/* D&D 中に pointer へ追従する半透明ゴースト */
+.layer-drag-ghost {
+  position: fixed;
+  z-index: 100;
+  pointer-events: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  opacity: 0.92;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 挿入位置インジケータ: カード間の 4px gap の中央（-3px）に線を引く */
