@@ -2,6 +2,7 @@ import { useDeferredValue, useMemo, useState } from 'react';
 import type { EditorSession } from '../session';
 import { flattenState } from '../engine/composite';
 import { getNode } from '../engine/editorState';
+import { isGroup } from '../engine/layer';
 import { cellPreviewState, listGroups, onionSkinState } from '../backend/variant';
 import { bufferToDataURL } from './thumbnail';
 
@@ -120,12 +121,15 @@ export function VariantsView({
       ) : (
         <div className="var-axes">
           {session.axes.map((axis) => {
-            const slotName = getNode(session.state, axis.slotId)?.name ?? '(失われた slot)';
+            const slotNode = getNode(session.state, axis.slotId);
+            const slotBroken = !slotNode || !isGroup(slotNode);
             return (
               <div className="var-axis" key={axis.id}>
                 <div className="var-axis-head">
                   <span className="var-axis-name">{axis.name}</span>
-                  <span className="muted">· {slotName}</span>
+                  <span className={`muted ${slotBroken ? 'var-broken' : ''}`}>
+                    · {slotBroken ? '⚠ 差し替え点なし' : slotNode!.name}
+                  </span>
                   <span className="var-axis-spacer" />
                   {session.revisions.length > 0 && (
                     <select
@@ -185,22 +189,39 @@ export function VariantsView({
                   </button>
                 </div>
 
-                {axis.cells.length === 0 ? (
-                  <p className="hint">
-                    このフォルダにはまだ別案レイヤーがありません。フォルダ内にレイヤーを足して「同期」を
-                    押してください。
+                {slotBroken && (
+                  <p className="hint var-broken">
+                    差し替え点フォルダが見つかりません（移動・削除された可能性）。この軸は機能しません。
+                    フォルダを作り直すか、✕ で軸を削除してください。下のセルも ✕ で外せます。
                   </p>
+                )}
+
+                {axis.cells.length === 0 ? (
+                  !slotBroken && (
+                    <p className="hint">
+                      このフォルダにはまだ別案レイヤーがありません。フォルダ内にレイヤーを足して「同期」を
+                      押してください。
+                    </p>
+                  )
                 ) : (
                   <div className="var-cells">
                     {axis.cells.map((cell) => {
                       const node = getNode(session.state, cell.id);
+                      const dead = !node; // レイヤーが見つからない（削除/構造破壊）
                       const on = !!node?.visible;
                       return (
                         <div
                           key={cell.id}
-                          className={`var-cell ${on ? 'on' : ''}`}
-                          title={cell.sourceRevId ? `${cell.name}（過去版由来）` : cell.name}
+                          className={`var-cell ${on ? 'on' : ''} ${dead ? 'dead' : ''}`}
+                          title={
+                            dead
+                              ? `${cell.name}（レイヤーが見つかりません）`
+                              : cell.sourceRevId
+                                ? `${cell.name}（過去版由来）`
+                                : cell.name
+                          }
                           onClick={() => {
+                            if (dead) return;
                             session.toggleCell(axis.id, cell.id);
                             onEdit();
                           }}
@@ -211,7 +232,7 @@ export function VariantsView({
                             alt={cell.name}
                           />
                           <div className="var-cell-name">
-                            <span className="var-cell-mark">{on ? '☑' : '☐'}</span>
+                            <span className="var-cell-mark">{dead ? '⚠' : on ? '☑' : '☐'}</span>
                             <span className="var-cell-label">{cell.name}</span>
                             {cell.sourceRevId &&
                               (session.revisions.some((r) => r.id === cell.sourceRevId) ? (
@@ -230,17 +251,30 @@ export function VariantsView({
                                   ⤴
                                 </span>
                               ))}
+                            {!dead && (
+                              <button
+                                className="var-cell-edit"
+                                title="このセルを作業対象として編集（pull）"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const leaf = session.pullCellToWorking(axis.id, cell.id);
+                                  onEdit();
+                                  if (leaf) onActivateLayer(leaf);
+                                }}
+                              >
+                                ✎
+                              </button>
+                            )}
                             <button
-                              className="var-cell-edit"
-                              title="このセルを作業対象として編集（pull）"
+                              className="var-cell-del"
+                              title="このセルを軸から外す（レイヤーは消えません）"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                const leaf = session.pullCellToWorking(axis.id, cell.id);
+                                session.removeCell(axis.id, cell.id);
                                 onEdit();
-                                if (leaf) onActivateLayer(leaf);
                               }}
                             >
-                              ✎
+                              ✕
                             </button>
                           </div>
                         </div>

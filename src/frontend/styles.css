@@ -1379,10 +1379,28 @@ button.active {
   cursor: default;
 }
 
-.var-cell-edit {
+.var-cell-edit,
+.var-cell-del {
   padding: 0 4px;
   font-size: 11px;
   line-height: 1.4;
+}
+
+.var-cell-del {
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.var-cell.dead {
+  opacity: 0.55;
+  cursor: default;
+  border-style: dashed;
+}
+
+.var-broken {
+  color: #eb8f8f;
 }
 
 .var-axis-head button.on {

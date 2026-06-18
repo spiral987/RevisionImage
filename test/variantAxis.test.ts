@@ -15,6 +15,7 @@ import {
   createAddGroupOp,
   createMoveNodeOp,
   createBrushOp,
+  createRemoveLayerOp,
 } from '../src/engine/operations';
 import { BASE_LAYER_ID } from '../src/engine/editorState';
 import type { VariantAxis } from '../src/types';
@@ -318,5 +319,41 @@ describe('層2: pull（セル→作業の引き出し）', () => {
     const { s, axis } = buildAxisSession();
     expect(s.pullCellToWorking('no-axis', 'cellA')).toBe(null);
     expect(s.pullCellToWorking(axis.id, 'no-cell')).toBe(null);
+  });
+});
+
+describe('Variants: レイヤー構造が壊れても安全に劣化', () => {
+  it('slot フォルダを削除しても各操作はクラッシュせず no-op/空に劣化（文書は replay 整合）', () => {
+    const { s, axis } = buildAxisSession(); // base + slot{cellA,cellB,cellC} + 軸
+    // slot ごと削除（cell も消える）。base が残るので削除は許可される。
+    s.apply(createRemoveLayerOp('slot'));
+    expect(getNode(s.state, 'slot')).toBeUndefined();
+    expect(getNode(s.state, 'cellA')).toBeUndefined();
+
+    // 各操作が落ちず、妥当に劣化する。
+    expect(s.toggleCell(axis.id, 'cellA')).toBe(false); // 死んだセル → no-op
+    expect(s.pullCellToWorking(axis.id, 'cellA')).toBe(null);
+    expect(s.parkSlot(axis.id)).toBe(false); // slot 無し
+    const rev = s.commitRevision('x');
+    expect(s.addRevisionAsCell(axis.id, rev)).toBe(false); // slot がフォルダでない
+    // プレビュー計算もクラッシュしない。
+    expect(() => cellPreviewState(s.state, axis, 'cellA')).not.toThrow();
+    expect(() => onionSkinState(s.state, axis)).not.toThrow();
+
+    // 同期すると死んだセルは落ちる（slot 無し → 空）。
+    s.syncAxisCells(axis.id);
+    expect(s.getAxis(axis.id)!.cells.length).toBe(0);
+
+    // axes はサイドカーで log/state に影響しないので、文書は replay 整合のまま。
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+  });
+
+  it('セルを slot の外へ出してもクラッシュせず、同期で軸から外れる', () => {
+    const { s, axis } = buildAxisSession();
+    s.apply(createMoveNodeOp('cellB', null, 0)); // cellB を最上位へ（slot の外）
+    expect(getNode(s.state, 'cellB')).toBeDefined(); // ノード自体は存命
+    s.syncAxisCells(axis.id);
+    expect(s.getAxis(axis.id)!.cells.map((c) => c.id)).toEqual(['cellA', 'cellC']);
+    expect(statesEqual(s.state, replay(s))).toBe(true);
   });
 });
