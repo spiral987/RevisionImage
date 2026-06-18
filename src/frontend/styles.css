@@ -1295,6 +1295,18 @@ button.active {
   color: var(--accent);
 }
 
+.var-cell-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .var-cell-src {
   color: var(--muted);
+}
+
+.var-cell-edit {
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
 }

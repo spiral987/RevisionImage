@@ -166,6 +166,7 @@ export function CanvasEditor({
   onEdit,
   highlightRegion,
   onRegionSelect,
+  activeLayerRequest,
 }: {
   session: EditorSession;
   width: number;
@@ -175,6 +176,8 @@ export function CanvasEditor({
   onEdit: () => void;
   highlightRegion: BBox | null;
   onRegionSelect: (bbox: BBox) => void;
+  /** 外部（Variants の pull 等）からアクティブレイヤーを指定する信号。n で再発火を保証。 */
+  activeLayerRequest?: { id: string; n: number } | null;
 }) {
   const replayerRef = useRef<Replayer | null>(null);
   if (!replayerRef.current) replayerRef.current = new Replayer(width, height);
@@ -334,6 +337,14 @@ export function CanvasEditor({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
+
+  // Variants の pull（セル→作業）等、外部からのアクティブレイヤー指定。リーフのみ受け付ける。
+  useEffect(() => {
+    if (!activeLayerRequest) return;
+    const node = getNode(session.state, activeLayerRequest.id);
+    if (node && !isGroup(node)) setActiveLayerId(activeLayerRequest.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLayerRequest]);
 
   const doUndo = () => {
     if (previewing) return;

@@ -18,10 +18,13 @@ export function VariantsView({
   session,
   version,
   onEdit,
+  onActivateLayer,
 }: {
   session: EditorSession;
   version: number;
   onEdit: () => void;
+  /** pull（セル→作業）でアクティブにすべきリーフ layer id を App 経由で CanvasEditor へ伝える。 */
+  onActivateLayer: (layerId: string) => void;
 }) {
   const deferred = useDeferredValue(version);
   const [name, setName] = useState('');
@@ -174,8 +177,24 @@ export function VariantsView({
                           />
                           <div className="var-cell-name">
                             <span className="var-cell-mark">{on ? '☑' : '☐'}</span>
-                            {cell.name}
-                            {cell.sourceRevId && <span className="var-cell-src" title="過去版由来">⤴</span>}
+                            <span className="var-cell-label">{cell.name}</span>
+                            {cell.sourceRevId && (
+                              <span className="var-cell-src" title="過去版由来">
+                                ⤴
+                              </span>
+                            )}
+                            <button
+                              className="var-cell-edit"
+                              title="このセルを作業対象として編集（pull）"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const leaf = session.pullCellToWorking(axis.id, cell.id);
+                                onEdit();
+                                if (leaf) onActivateLayer(leaf);
+                              }}
+                            >
+                              ✎
+                            </button>
                           </div>
                         </div>
                       );

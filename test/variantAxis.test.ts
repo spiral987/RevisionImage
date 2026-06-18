@@ -273,3 +273,34 @@ describe('層2: park（退避）', () => {
     expect(s.parkSlot(axis.id)).toBe(false);
   });
 });
+
+describe('層2: pull（セル→作業の引き出し）', () => {
+  it('セルを可視にし、編集対象リーフ id を返す（replay 整合）', () => {
+    const { s, axis } = buildAxisSession();
+    s.toggleCell(axis.id, 'cellB'); // 可視→非表示
+    expect(getNode(s.state, 'cellB')!.visible).toBe(false);
+
+    const leaf = s.pullCellToWorking(axis.id, 'cellB');
+    expect(leaf).toBe('cellB'); // リーフセルは自身
+    expect(getNode(s.state, 'cellB')!.visible).toBe(true); // 可視化される
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+  });
+
+  it('セルがフォルダなら最初のリーフを返す', () => {
+    const s = new EditorSession(W, H);
+    s.apply(createAddGroupOp('slot', 'slot'));
+    s.apply(createAddGroupOp('cellG', 'cellG')); // フォルダのセル
+    s.apply(createAddLayerOp('inner', 'inner', W, H));
+    s.apply(createMoveNodeOp('cellG', 'slot', 0));
+    s.apply(createMoveNodeOp('inner', 'cellG', 0));
+    const axis = s.addAxis('目', 'slot');
+    s.syncAxisCells(axis.id);
+    expect(s.pullCellToWorking(axis.id, 'cellG')).toBe('inner');
+  });
+
+  it('不明な軸 / セルは null', () => {
+    const { s, axis } = buildAxisSession();
+    expect(s.pullCellToWorking('no-axis', 'cellA')).toBe(null);
+    expect(s.pullCellToWorking(axis.id, 'no-cell')).toBe(null);
+  });
+});

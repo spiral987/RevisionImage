@@ -43,6 +43,8 @@ export function App() {
   // active で描画/集約だけ切り替える（展開のたびに全ノード再生成して固まるのを防ぐ）。
   const [revgOpen, setRevgOpen] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Variants の pull（セル→作業）で CanvasEditor のアクティブレイヤーを切り替える信号。
+  const [activeReq, setActiveReq] = useState<{ id: string; n: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const psdInputRef = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(false);
@@ -285,6 +287,7 @@ export function App() {
         onEdit={onEdit}
         highlightRegion={selectedRegion}
         onRegionSelect={onCanvasRegionSelect}
+        activeLayerRequest={activeReq}
       />
 
       {/* 上部の細いフロートバー: タイトル + キャンバスサイズ + JSON 入出力 */}
@@ -471,7 +474,12 @@ export function App() {
         className="float-variants"
       >
         <Section title="VARIANTS" defaultOpen>
-          <VariantsView session={session} version={version} onEdit={onEdit} />
+          <VariantsView
+            session={session}
+            version={version}
+            onEdit={onEdit}
+            onActivateLayer={(id) => setActiveReq((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
+          />
         </Section>
       </FloatWindow>
 

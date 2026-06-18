@@ -1,7 +1,7 @@
 import type { Dag, EditorState, Operation, VariantAxis, VariantCell } from './types';
 import { applyOperation } from './engine/operation';
 import { createInitialState, getNode } from './engine/editorState';
-import { isGroup } from './engine/layer';
+import { isGroup, firstLeafId } from './engine/layer';
 import './engine/operations'; // 操作ハンドラを登録
 import {
   createAddImageLayerOp,
@@ -360,6 +360,21 @@ export class EditorSession {
     this.applyBatch(ops);
     this.addCell(axisId, { id: layerId, name });
     return true;
+  }
+
+  /**
+   * pull（引き出し, CONCEPT §3.4）: 空間のセルを時間軸の作業対象として引き出す。セルを可視にし、
+   * 編集対象にすべきリーフ layer の id を返す（セルがフォルダなら最初のリーフ）。UI 側はこの id を
+   * CanvasEditor のアクティブレイヤーに設定する。セルが無ければ null。
+   */
+  pullCellToWorking(axisId: string, cellId: string): string | null {
+    const axis = this.getAxis(axisId);
+    if (!axis || !axis.cells.some((c) => c.id === cellId)) return null;
+    const node = getNode(this.state, cellId);
+    if (!node) return null;
+    const leaf = isGroup(node) ? firstLeafId([node]) ?? null : node.id;
+    if (!node.visible) this.apply(createSetLayerVisibilityOp(cellId, true));
+    return leaf;
   }
 
   /**
