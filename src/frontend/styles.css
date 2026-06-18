@@ -620,6 +620,35 @@ button.active {
   display: flex;
   align-items: center;
   gap: 6px;
+  border-radius: 4px;
+}
+
+/* レイヤー D&D: つかむグリップとドロップ位置インジケータ */
+.layer-grip {
+  cursor: grab;
+  color: var(--muted);
+  letter-spacing: -2px;
+  padding: 0 1px;
+  user-select: none;
+  flex: none;
+}
+
+.layer-grip:active {
+  cursor: grabbing;
+}
+
+.layer-head.drop-above {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.layer-head.drop-below {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
+.layer-head.drop-into {
+  background: rgba(91, 157, 255, 0.18);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .layer-name {

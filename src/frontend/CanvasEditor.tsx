@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MutableRefObject, PointerEvent as ReactPointerEvent } from 'react';
+import type {
+  MutableRefObject,
+  PointerEvent as ReactPointerEvent,
+  DragEvent as ReactDragEvent,
+} from 'react';
 import type {
   BBox,
   Dag,
@@ -47,6 +51,7 @@ import { rasterizeSegment, stampDab, type StampFn } from '../engine/strokeRaster
 import { blendPixel, erasePixel } from '../engine/imageBuffer';
 import { clampBBox, padBBox, strokesBBox, unionBBox } from '../engine/geom';
 import { compositeToCanvas } from './render';
+import { reorderIndex } from './layerDnd';
 import { describeOp } from './opLabel';
 import { ColorPicker } from './ColorPicker';
 import { FloatWindow, Section } from './Float';
@@ -206,6 +211,8 @@ export function CanvasEditor({
   const shapeRef = useRef<{ startX: number; startY: number } | null>(null);
   // S キー押下中の「太さ調整モード」での上下ドラッグ（押下時の clientY と太さを控える）。
   const sizeDragRef = useRef<{ startY: number; startSize: number } | null>(null);
+  // レイヤーパネルの D&D 並べ替えでドラッグ中のノード id。
+  const dragIdRef = useRef<string | null>(null);
 
   const [tool, setTool] = useState<Tool>('brush');
   const [sizeAdjust, setSizeAdjust] = useState(false); // S キー押下中 = 太さ調整モード
@@ -225,6 +232,10 @@ export function CanvasEditor({
   const [opacityDraft, setOpacityDraft] = useState<{ id: string; v: number } | null>(null);
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  // レイヤー D&D 中のドロップ位置ヒント（対象ノード id と、その上/下/中への挿入）。
+  const [dropHint, setDropHint] = useState<{ id: string; pos: 'above' | 'below' | 'into' } | null>(
+    null,
+  );
   // ドラッグ中の不透明度プレビュー（再レンダーを介さず合成へ反映するため ref）。
   const opacityPreviewRef = useRef<{ layerId: string; opacity: number } | null>(null);
 
@@ -1385,22 +1396,69 @@ export function CanvasEditor({
     repaint();
   };
 
-  // dir=+1: 前面(上)へ / dir=-1: 背面(下)へ。同じ親内で兄弟と入れ替える。
-  const moveLayer = (n: LayerNode, dir: 1 | -1) => {
-    if (previewing) return;
-    const info = getParentInfo(session.state, n.id);
-    if (!info) return;
-    const to = info.index + dir;
-    if (to < 0 || to >= info.siblings.length) return;
-    session.apply(createMoveNodeOp(n.id, info.parentId, to));
+  // ---- レイヤーの D&D（並べ替え / フォルダ出し入れ）。▲▼ ボタンと 📁→ 選択の代替。 ----
+  // 表示は上=最前面で逆順描画するので、視覚上の「above（上）」は配列では index 大（後ろ）になる。
+  const onDragStartNode = (n: LayerNode, e: ReactDragEvent) => {
+    dragIdRef.current = n.id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', n.id);
+  };
+
+  const clearDrag = () => {
+    dragIdRef.current = null;
+    setDropHint(null);
+  };
+
+  const onNodeDragOver = (n: LayerNode, e: ReactDragEvent) => {
+    const dragged = dragIdRef.current;
+    if (!dragged || dragged === n.id) return;
+    const dn = getNode(session.state, dragged);
+    if (dn && collectNodeIds(dn).includes(n.id)) return; // 自分の子孫へは不可
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const r = (e.clientY - rect.top) / Math.max(1, rect.height);
+    const pos: 'above' | 'below' | 'into' = isGroup(n)
+      ? r < 0.28
+        ? 'above'
+        : r > 0.72
+          ? 'below'
+          : 'into'
+      : r < 0.5
+        ? 'above'
+        : 'below';
+    setDropHint((p) => (p && p.id === n.id && p.pos === pos ? p : { id: n.id, pos }));
+  };
+
+  const onNodeDrop = (n: LayerNode, e: ReactDragEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // パネル余白(ul)へのドロップと二重発火させない
+    const dragged = dragIdRef.current;
+    const hint = dropHint;
+    clearDrag();
+    if (previewing || !dragged || dragged === n.id || !hint || hint.id !== n.id) return;
+    const dn = getNode(session.state, dragged);
+    if (!dn || collectNodeIds(dn).includes(n.id)) return; // 子孫へは不可
+    if (hint.pos === 'into') {
+      session.apply(createMoveNodeOp(dragged, n.id, Number.MAX_SAFE_INTEGER)); // フォルダ先頭(最前面)へ
+    } else {
+      const info = getParentInfo(session.state, n.id);
+      if (!info) return;
+      const from = getParentInfo(session.state, dragged);
+      const sameParent = from && from.parentId === info.parentId ? from.index : null;
+      session.apply(createMoveNodeOp(dragged, info.parentId, reorderIndex(hint.pos, info.index, sameParent)));
+    }
     onEdit();
     repaint();
   };
 
-  // ノードを別のフォルダ（targetId）/ 最上位(null) の先頭(=視覚的に最前面)へ移動。
-  const moveToContainer = (n: LayerNode, targetId: string | null) => {
-    if (previewing) return;
-    session.apply(createMoveNodeOp(n.id, targetId, Number.MAX_SAFE_INTEGER));
+  // パネル余白へのドロップ = 最上位の最前面へ（フォルダから出す手段）。
+  const onListDrop = (e: ReactDragEvent) => {
+    e.preventDefault();
+    const dragged = dragIdRef.current;
+    clearDrag();
+    if (previewing || !dragged || !getNode(session.state, dragged)) return;
+    session.apply(createMoveNodeOp(dragged, null, Number.MAX_SAFE_INTEGER));
     onEdit();
     repaint();
   };
@@ -1464,37 +1522,32 @@ export function CanvasEditor({
     repaint();
   };
 
-  // 移動先候補（最上位 + 自分の子孫でない全グループ）。
-  const moveTargets = (nodeId: string): { id: string | null; name: string }[] => {
-    const self = getNode(session.state, nodeId);
-    const excl = new Set(self ? collectNodeIds(self) : []);
-    const out: { id: string | null; name: string }[] = [{ id: null, name: '最上位' }];
-    const walk = (nodes: LayerNode[], prefix: string) => {
-      for (const x of nodes) {
-        if (isGroup(x)) {
-          if (!excl.has(x.id)) out.push({ id: x.id, name: prefix + x.name });
-          walk(x.children, prefix + '· ');
-        }
-      }
-    };
-    walk(session.state.layers, '');
-    return out;
-  };
-
   // レイヤーツリーを再帰描画（フォルダは折りたたみ可。表示は上=最前面なので reverse）。
   const renderNode = (n: LayerNode, depth: number, siblings: LayerNode[]) => {
-    const index = siblings.findIndex((x) => x.id === n.id);
-    const isTop = index === siblings.length - 1;
-    const isBottom = index === 0;
     const grp = isGroup(n) ? n : null;
     const leaf = grp ? null : (n as Layer);
     const editing = editingLayerId === n.id;
     const opVal = opacityDraft?.id === n.id ? opacityDraft.v : n.opacity;
     const active = !grp && n.id === activeLayerId;
     const disableDelete = previewing || leafCount() - collectLeafIds(n).length < 1;
+    const dropCls = dropHint?.id === n.id ? ` drop-${dropHint.pos}` : '';
     return (
       <li key={n.id} className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''}`}>
-        <div className="layer-head" style={{ paddingLeft: 4 + depth * 12 }}>
+        <div
+          className={`layer-head${dropCls}`}
+          style={{ paddingLeft: 4 + depth * 12 }}
+          onDragOver={(e) => onNodeDragOver(n, e)}
+          onDrop={(e) => onNodeDrop(n, e)}
+        >
+          <span
+            className="layer-grip"
+            draggable={!previewing && !editing}
+            title="ドラッグで並べ替え / フォルダへ出し入れ"
+            onDragStart={(e) => onDragStartNode(n, e)}
+            onDragEnd={clearDrag}
+          >
+            ⠿
+          </span>
           {grp ? (
             <button
               className="icon-btn"
@@ -1544,29 +1597,6 @@ export function CanvasEditor({
             </span>
           )}
           <span className="layer-actions">
-            <button className="icon-btn" title="前面へ" disabled={previewing || isTop} onClick={() => moveLayer(n, 1)}>
-              ▲
-            </button>
-            <button className="icon-btn" title="背面へ" disabled={previewing || isBottom} onClick={() => moveLayer(n, -1)}>
-              ▼
-            </button>
-            <select
-              className="layer-move"
-              title="フォルダへ移動"
-              value=""
-              disabled={previewing}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v) moveToContainer(n, v === '__root__' ? null : v);
-              }}
-            >
-              <option value="">📁→</option>
-              {moveTargets(n.id).map((t) => (
-                <option key={t.id ?? '__root__'} value={t.id ?? '__root__'}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
             {!grp && (
               <button
                 className="icon-btn"
@@ -1902,12 +1932,19 @@ export function CanvasEditor({
               e.target.value = '';
             }}
           />
-          <ul className="layer-list">
+          <ul
+            className="layer-list"
+            onDragOver={(e) => {
+              if (dragIdRef.current) e.preventDefault();
+            }}
+            onDrop={onListDrop}
+          >
             {session.state.layers
               .slice()
               .reverse()
               .map((n) => renderNode(n, 0, session.state.layers))}
           </ul>
+          <p className="hint">⠿ をドラッグで並べ替え。フォルダの中央に落とすと収納、余白に落とすと最上位へ。</p>
         </Section>
 
         <Section title={`LOG (${log.length})`} defaultOpen={false}>
