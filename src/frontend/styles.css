@@ -605,6 +605,7 @@ button.active {
 }
 
 .layer-item {
+  position: relative;
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 13px;
@@ -620,7 +621,6 @@ button.active {
   display: flex;
   align-items: center;
   gap: 6px;
-  border-radius: 4px;
 }
 
 /* レイヤー D&D: つかむグリップとドロップ位置インジケータ */
@@ -637,15 +637,28 @@ button.active {
   cursor: grabbing;
 }
 
-.layer-head.drop-above {
-  box-shadow: inset 0 2px 0 0 var(--accent);
+/* 挿入位置インジケータ: カード間の 4px gap の中央（-3px）に線を引く */
+.layer-item.drop-above::before,
+.layer-item.drop-below::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
 }
 
-.layer-head.drop-below {
-  box-shadow: inset 0 -2px 0 0 var(--accent);
+.layer-item.drop-above::before {
+  top: -4px;
 }
 
-.layer-head.drop-into {
+.layer-item.drop-below::after {
+  bottom: -4px;
+}
+
+.layer-item.drop-into {
   background: rgba(91, 157, 255, 0.18);
   outline: 1px solid var(--accent);
   outline-offset: -1px;
@@ -734,14 +747,17 @@ button.active {
   cursor: default;
 }
 
-.layer-opacity {
+/* アクティブレイヤー用の単一不透明度スライダー（Layers リスト上部に固定） */
+.layer-active-opacity {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
-.layer-opacity input[type='range'] {
+.layer-active-opacity input[type='range'] {
   flex: 1;
 }
 

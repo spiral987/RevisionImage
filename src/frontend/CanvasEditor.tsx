@@ -1407,12 +1407,12 @@ export function CanvasEditor({
     dragIdRef.current = n.id;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', n.id);
-    // ドラッグ画像を「行全体」にして、つかんだ位置のままマウスに追従させる
+    // ドラッグ画像を「レイヤーを表すカード矩形全体」にして、つかんだ位置のままマウスに追従させる
     // （既定だとドラッグ可能要素＝小さな ⠿ グリップだけが追従して分かりにくい）。
-    const head = (e.currentTarget as HTMLElement).closest('.layer-head') as HTMLElement | null;
-    if (head) {
-      const rect = head.getBoundingClientRect();
-      e.dataTransfer.setDragImage(head, e.clientX - rect.left, e.clientY - rect.top);
+    const card = (e.currentTarget as HTMLElement).closest('.layer-item') as HTMLElement | null;
+    if (card) {
+      const rect = card.getBoundingClientRect();
+      e.dataTransfer.setDragImage(card, e.clientX - rect.left, e.clientY - rect.top);
     }
   };
 
@@ -1539,14 +1539,13 @@ export function CanvasEditor({
     const grp = isGroup(n) ? n : null;
     const leaf = grp ? null : (n as Layer);
     const editing = editingLayerId === n.id;
-    const opVal = opacityDraft?.id === n.id ? opacityDraft.v : n.opacity;
     const active = !grp && n.id === activeLayerId;
     const disableDelete = previewing || leafCount() - collectLeafIds(n).length < 1;
     const dropCls = dropHint?.id === n.id ? ` drop-${dropHint.pos}` : '';
     return (
-      <li key={n.id} className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''}`}>
+      <li key={n.id} className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''}${dropCls}`}>
         <div
-          className={`layer-head${dropCls}`}
+          className="layer-head"
           style={{ paddingLeft: 4 + depth * 12 }}
           onDragOver={(e) => onNodeDragOver(n, e)}
           onDrop={(e) => onNodeDrop(n, e)}
@@ -1623,21 +1622,6 @@ export function CanvasEditor({
               🗑
             </button>
           </span>
-        </div>
-        <div className="layer-opacity" style={{ paddingLeft: 4 + depth * 12 }}>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={opVal}
-            disabled={previewing}
-            onChange={(e) => onOpacityInput(n, Number(e.target.value))}
-            onPointerUp={() => commitOpacity(n)}
-            onBlur={() => commitOpacity(n)}
-            onKeyUp={() => commitOpacity(n)}
-          />
-          <span className="layer-opacity-val">{Math.round(opVal * 100)}%</span>
         </div>
         {grp && !grp.collapsed && (
           <ul className="layer-list nested">
@@ -1944,6 +1928,29 @@ export function CanvasEditor({
               e.target.value = '';
             }}
           />
+          {(() => {
+            // アクティブレイヤー1つに対する不透明度スライダー（各行から集約）。
+            const al = getActiveLayer();
+            const v = al ? (opacityDraft?.id === al.id ? opacityDraft.v : al.opacity) : 1;
+            return (
+              <div className="layer-active-opacity">
+                <span className="muted">不透明度</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={v}
+                  disabled={!al || previewing}
+                  onChange={(e) => al && onOpacityInput(al, Number(e.target.value))}
+                  onPointerUp={() => al && commitOpacity(al)}
+                  onBlur={() => al && commitOpacity(al)}
+                  onKeyUp={() => al && commitOpacity(al)}
+                />
+                <span className="layer-opacity-val">{Math.round(v * 100)}%</span>
+              </div>
+            );
+          })()}
           <ul
             className="layer-list"
             onDragOver={(e) => {
