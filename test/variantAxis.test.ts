@@ -13,9 +13,11 @@ import {
   createAddLayerOp,
   createAddGroupOp,
   createMoveNodeOp,
+  createBrushOp,
 } from '../src/engine/operations';
+import { BASE_LAYER_ID } from '../src/engine/editorState';
 import type { VariantAxis } from '../src/types';
-import { statesEqual } from './helpers';
+import { statesEqual, line } from './helpers';
 
 const W = 16;
 const H = 16;
@@ -183,5 +185,48 @@ describe('空間軸（Variants）オーサリング & プレビュー', () => {
     const { s } = buildAxisSession();
     expect(slotChildren(s.state, 'slot').map((c) => c.id)).toEqual(['cellA', 'cellB', 'cellC']);
     expect(listGroups(s.state).map((g) => g.id)).toContain('slot');
+  });
+});
+
+describe('層2: 時間→空間の昇格（addRevisionAsCell）', () => {
+  const P = { color: [10, 120, 220] as [number, number, number], size: 4, opacity: 1 };
+
+  it('過去のコミットを別案セルとして取り込む（slot内・非表示・出自保持・replay整合）', () => {
+    const s = new EditorSession(W, H);
+    s.apply(createAddGroupOp('slot', 'slot'));
+    const axis = s.addAxis('目', 'slot');
+    s.apply(createBrushOp(BASE_LAYER_ID, line(2, 2, 12, 12, 5), P, W, H));
+    const rev = s.commitRevision('v1');
+
+    expect(s.addRevisionAsCell(axis.id, rev)).toBe(true);
+    const cells = s.getAxis(axis.id)!.cells;
+    expect(cells.length).toBe(1);
+    const cellId = cells[0].id;
+    // 出自を保持（時間の読みとの橋）
+    expect(cells[0].sourceRevId).toBe(rev.id);
+    // slot フォルダ内に配置され、初期は非表示
+    expect(slotChildren(s.state, 'slot').map((c) => c.id)).toContain(cellId);
+    expect(getNode(s.state, cellId)!.visible).toBe(false);
+    // 取り込みも操作ログに残り replay 整合
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+    // トグルで表示にできる
+    expect(s.toggleCell(axis.id, cellId)).toBe(true);
+    expect(getNode(s.state, cellId)!.visible).toBe(true);
+  });
+
+  it('何も描かれていない版 / slot がフォルダでない / 不明な軸は false', () => {
+    const s = new EditorSession(W, H);
+    s.apply(createAddGroupOp('slot', 'slot'));
+    const axis = s.addAxis('目', 'slot');
+    const emptyRev = s.commitRevision('empty'); // 何も描いていない
+    expect(s.addRevisionAsCell(axis.id, emptyRev)).toBe(false);
+
+    s.apply(createBrushOp(BASE_LAYER_ID, line(2, 2, 12, 12, 5), P, W, H));
+    const rev = s.commitRevision('v1');
+    expect(s.addRevisionAsCell('no-such-axis', rev)).toBe(false);
+
+    // slot がリーフ（フォルダでない）軸は取り込めない
+    const leafAxis = s.addAxis('x', BASE_LAYER_ID);
+    expect(s.addRevisionAsCell(leafAxis.id, rev)).toBe(false);
   });
 });

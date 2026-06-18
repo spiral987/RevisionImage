@@ -1,10 +1,21 @@
 import type { Dag, EditorState, Operation, VariantAxis, VariantCell } from './types';
 import { applyOperation } from './engine/operation';
-import { createInitialState } from './engine/editorState';
+import { createInitialState, getNode } from './engine/editorState';
+import { isGroup } from './engine/layer';
 import './engine/operations'; // 操作ハンドラを登録
+import {
+  createAddImageLayerOp,
+  createMoveNodeOp,
+  createSetLayerVisibilityOp,
+} from './engine/operations';
 import { Logger } from './backend/logger';
 import { buildDag } from './backend/dagBuilder';
-import { buildUnifiedDag, computeHeads, type CommittedRevision } from './backend/revision';
+import {
+  buildUnifiedDag,
+  computeHeads,
+  revisionPiece,
+  type CommittedRevision,
+} from './backend/revision';
 import { selectionOps, slotChildren } from './backend/variant';
 import { genId } from './util/id';
 
@@ -294,6 +305,29 @@ export class EditorSession {
     const ops = selectionOps(axis, this.state, cellId);
     if (ops.length === 0) return false;
     this.applyBatch(ops);
+    return true;
+  }
+
+  /**
+   * 過去のコミット(リビジョン)をこの軸の別案セルとして取り込む（時間→空間の昇格, CONCEPT §3.3）。
+   * リビジョンの内容ピースを slot フォルダ内の新レイヤーとして配置し、セルに登録する
+   * （sourceRevId に出自を保持＝時間の読みとの橋）。取り込んだセルは初期は非表示にして現在の
+   * 合成を乱さない（Variants でトグルしてプレビュー/採用する）。成功で true。
+   */
+  addRevisionAsCell(axisId: string, rev: CommittedRevision): boolean {
+    const axis = this.getAxis(axisId);
+    if (!axis) return false;
+    const slot = getNode(this.state, axis.slotId);
+    if (!slot || !isGroup(slot)) return false; // slot はフォルダのみ
+    const piece = revisionPiece(rev, this.width, this.height);
+    if (!piece) return false; // 何も描かれていない版
+    const layerId = genId('layer');
+    this.applyBatch([
+      createAddImageLayerOp(layerId, rev.label, piece.buffer, piece.x, piece.y, this.width, this.height),
+      createMoveNodeOp(layerId, axis.slotId, 1e9), // slot フォルダの末尾へ
+      createSetLayerVisibilityOp(layerId, false), // 初期は非表示
+    ]);
+    this.addCell(axisId, { id: layerId, name: rev.label, sourceRevId: rev.id });
     return true;
   }
 

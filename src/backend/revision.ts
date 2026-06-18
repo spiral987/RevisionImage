@@ -1,6 +1,10 @@
-import type { Dag, Operation, Revision } from '../types';
+import type { Dag, ImageBuffer, Operation, Revision } from '../types';
 import { ROOT_ID, addEdge, createDag } from './dag';
 import { buildDag } from './dagBuilder';
+import { Replayer } from './replayer';
+import { flattenState } from '../engine/composite';
+import { layerContentBBox } from '../engine/layer';
+import { cropBuffer } from '../engine/imageBuffer';
 
 /**
  * 確定済みリビジョン。SPEC の Revision に、確定時の操作列スナップショット(ops)を加えたもの。
@@ -63,4 +67,31 @@ export function buildUnifiedDag(
     }
   }
   return unified;
+}
+
+/**
+ * リビジョンの確定画像を「内容(非透明)の bbox で切り出した素材ピース」として返す。
+ * 時間→空間の昇格（過去の版を別案セルとして取り込む）で使う。透明背景で合成するので
+ * 描かれていない領域は透明＝現在の文書に重ねて使える。x,y は元のキャンバス座標。
+ * 何も描かれていなければ null。
+ * （revision-palette ブランチの同名関数と同等。将来両ブランチ統合時はこの1関数が要統合。）
+ */
+export function revisionPiece(
+  rev: CommittedRevision,
+  width: number,
+  height: number,
+): { buffer: ImageBuffer; x: number; y: number } | null {
+  const state = new Replayer(width, height).replay(rev.ops);
+  const flat = flattenState(state, { background: [0, 0, 0, 0] });
+  const bbox = layerContentBBox({
+    id: '',
+    name: '',
+    buffer: flat,
+    offsetX: 0,
+    offsetY: 0,
+    visible: true,
+    opacity: 1,
+  });
+  if (bbox.w <= 0 || bbox.h <= 0) return null;
+  return { buffer: cropBuffer(flat, bbox.x, bbox.y, bbox.w, bbox.h), x: bbox.x, y: bbox.y };
 }

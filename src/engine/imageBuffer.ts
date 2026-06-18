@@ -9,6 +9,31 @@ export function cloneImageBuffer(buf: ImageBuffer): ImageBuffer {
   return { width: buf.width, height: buf.height, data: new Uint8ClampedArray(buf.data) };
 }
 
+/**
+ * src の矩形 (x,y,w,h) を切り出した新しいバッファを返す（範囲外は透明）。
+ * リビジョンの確定画像から「内容の bbox」だけを素材ピースとして取り出すのに使う。
+ */
+export function cropBuffer(src: ImageBuffer, x: number, y: number, w: number, h: number): ImageBuffer {
+  const out = createImageBuffer(w, h);
+  const sd = src.data;
+  const od = out.data;
+  for (let yy = 0; yy < h; yy++) {
+    const sy = y + yy;
+    if (sy < 0 || sy >= src.height) continue;
+    for (let xx = 0; xx < w; xx++) {
+      const sx = x + xx;
+      if (sx < 0 || sx >= src.width) continue;
+      const si = (sy * src.width + sx) * 4;
+      const di = (yy * w + xx) * 4;
+      od[di] = sd[si];
+      od[di + 1] = sd[si + 1];
+      od[di + 2] = sd[si + 2];
+      od[di + 3] = sd[si + 3];
+    }
+  }
+  return out;
+}
+
 /** 2つのバッファがビット同一か（決定性検証に使用）。 */
 export function buffersEqual(a: ImageBuffer, b: ImageBuffer): boolean {
   if (a.width !== b.width || a.height !== b.height) return false;

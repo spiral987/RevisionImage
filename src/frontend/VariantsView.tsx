@@ -96,6 +96,28 @@ export function VariantsView({
                   <span className="var-axis-name">{axis.name}</span>
                   <span className="muted">· {slotName}</span>
                   <span className="var-axis-spacer" />
+                  {session.revisions.length > 0 && (
+                    <select
+                      className="var-addrev"
+                      value=""
+                      title="過去のコミットを別案セルとして取り込む（時間→空間の昇格）"
+                      onChange={(e) => {
+                        const rev = session.revisions.find((r) => r.id === e.target.value);
+                        if (rev) {
+                          session.addRevisionAsCell(axis.id, rev);
+                          onEdit();
+                        }
+                        e.currentTarget.value = '';
+                      }}
+                    >
+                      <option value="">＋版から…</option>
+                      {session.revisions.map((r, i) => (
+                        <option key={r.id} value={r.id}>
+                          #{i} {r.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     title="slot フォルダの中身とセルを同期する"
                     onClick={() => {
