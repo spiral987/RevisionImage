@@ -1302,7 +1302,17 @@ button.active {
 }
 
 .var-cell-src {
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.var-cell-src.muted {
   color: var(--muted);
+  cursor: default;
 }
 
 .var-cell-edit {

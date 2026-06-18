@@ -21,12 +21,15 @@ export function VariantsView({
   version,
   onEdit,
   onActivateLayer,
+  onShowRevision,
 }: {
   session: EditorSession;
   version: number;
   onEdit: () => void;
   /** pull（セル→作業）でアクティブにすべきリーフ layer id を App 経由で CanvasEditor へ伝える。 */
   onActivateLayer: (layerId: string) => void;
+  /** 空間→時間の相互ナビ: 出自リビジョンを Revisions（時間の読み）で選択させる。 */
+  onShowRevision: (revId: string) => void;
 }) {
   const deferred = useDeferredValue(version);
   const [name, setName] = useState('');
@@ -210,11 +213,23 @@ export function VariantsView({
                           <div className="var-cell-name">
                             <span className="var-cell-mark">{on ? '☑' : '☐'}</span>
                             <span className="var-cell-label">{cell.name}</span>
-                            {cell.sourceRevId && (
-                              <span className="var-cell-src" title="過去版由来">
-                                ⤴
-                              </span>
-                            )}
+                            {cell.sourceRevId &&
+                              (session.revisions.some((r) => r.id === cell.sourceRevId) ? (
+                                <button
+                                  className="var-cell-src"
+                                  title="出自の版を Revisions（時間の読み）で選択"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onShowRevision(cell.sourceRevId!);
+                                  }}
+                                >
+                                  ⤴
+                                </button>
+                              ) : (
+                                <span className="var-cell-src muted" title="出自の版は削除済み">
+                                  ⤴
+                                </span>
+                              ))}
                             <button
                               className="var-cell-edit"
                               title="このセルを作業対象として編集（pull）"

@@ -68,6 +68,14 @@ export function App() {
       axes: session.axes,
     });
 
+  // 空間→時間の相互ナビ: Variants のセル(出自付き)から元コミットを Revisions で選択・スクロール表示。
+  const showRevision = (id: string) => {
+    setSelectedRevIds([id]);
+    requestAnimationFrame(() =>
+      document.getElementById(`nrc-rev-${id}`)?.scrollIntoView({ block: 'nearest' }),
+    );
+  };
+
   // 読み込み後に dims / 入力欄をセッションへ同期する。
   const syncDims = () => {
     setDims({ w: session.width, h: session.height });
@@ -391,6 +399,7 @@ export function App() {
               {revisions.map((r, i) => (
                 <li
                   key={r.id}
+                  id={`nrc-rev-${r.id}`}
                   className={selectedRevIds.includes(r.id) ? 'selected' : ''}
                   onClick={() => toggleRev(r.id)}
                 >
@@ -479,6 +488,7 @@ export function App() {
             version={version}
             onEdit={onEdit}
             onActivateLayer={(id) => setActiveReq((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
+            onShowRevision={showRevision}
           />
         </Section>
       </FloatWindow>
