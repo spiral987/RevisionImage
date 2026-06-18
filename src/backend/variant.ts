@@ -42,6 +42,33 @@ export function cellPreviewState(
   return st;
 }
 
+/**
+ * オニオンスキン用 state: slot 内の全セルを可視にし、いま隠れているセルは ghostOpacity に下げる
+ * （表示中のセルは不透明のまま）。複数の別案を重ねて見る共在表示（CONCEPT §4.2-3 / §7）。
+ * パネル内プレビュー専用で、メインキャンバスには重ねない（SideViews の重ね合わせ不可制約への配慮）。
+ * state は変更せず複製を返す。
+ */
+export function onionSkinState(
+  state: EditorState,
+  axis: VariantAxis,
+  ghostOpacity = 0.35,
+): EditorState {
+  let st = state;
+  const slot = getNode(st, axis.slotId);
+  if (slot && !slot.visible) st = updateNode(st, axis.slotId, (n) => ({ ...n, visible: true }));
+  for (const cell of axis.cells) {
+    const node = getNode(st, cell.id);
+    if (!node) continue;
+    const wasVisible = node.visible;
+    st = updateNode(st, cell.id, (n) => ({
+      ...n,
+      visible: true,
+      opacity: wasVisible ? n.opacity : ghostOpacity,
+    }));
+  }
+  return st;
+}
+
 /** slot グループ直下の子（セル候補）を返す。slot がグループでなければ空。 */
 export function slotChildren(
   state: EditorState,

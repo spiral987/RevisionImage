@@ -7,6 +7,7 @@ import {
   cellPreviewState,
   slotChildren,
   listGroups,
+  onionSkinState,
 } from '../src/backend/variant';
 import { serializeProject } from '../src/backend/repository';
 import {
@@ -185,6 +186,21 @@ describe('空間軸（Variants）オーサリング & プレビュー', () => {
     const { s } = buildAxisSession();
     expect(slotChildren(s.state, 'slot').map((c) => c.id)).toEqual(['cellA', 'cellB', 'cellC']);
     expect(listGroups(s.state).map((g) => g.id)).toContain('slot');
+  });
+
+  it('onionSkinState: 隠れたセルを ghost 不透明度で可視化（表示中はそのまま・元は不変）', () => {
+    const { s, axis } = buildAxisSession();
+    s.toggleCell(axis.id, 'cellB'); // cellB を非表示（A/C は表示のまま）
+    const onion = onionSkinState(s.state, axis, 0.3);
+    // 全セルが可視
+    expect(getNode(onion, 'cellA')!.visible).toBe(true);
+    expect(getNode(onion, 'cellB')!.visible).toBe(true);
+    expect(getNode(onion, 'cellC')!.visible).toBe(true);
+    // 隠れていた cellB は ghost、表示中は不透明のまま
+    expect(getNode(onion, 'cellB')!.opacity).toBe(0.3);
+    expect(getNode(onion, 'cellA')!.opacity).toBe(1);
+    // 元 state は不変（純関数）
+    expect(getNode(s.state, 'cellB')!.visible).toBe(false);
   });
 });
 

@@ -2,11 +2,13 @@ import { useDeferredValue, useMemo, useState } from 'react';
 import type { EditorSession } from '../session';
 import { flattenState } from '../engine/composite';
 import { getNode } from '../engine/editorState';
-import { cellPreviewState, listGroups } from '../backend/variant';
+import { cellPreviewState, listGroups, onionSkinState } from '../backend/variant';
 import { bufferToDataURL } from './thumbnail';
 
 const THUMB_W = 72;
 const THUMB_H = 54;
+const ONION_W = 220;
+const ONION_H = 160;
 
 /**
  * 空間の読み（差分制作 / Variants）UI（CONCEPT §3.3 層1 の空間UI）。
@@ -29,6 +31,8 @@ export function VariantsView({
   const deferred = useDeferredValue(version);
   const [name, setName] = useState('');
   const [slotId, setSlotId] = useState('');
+  // オニオンスキン（重ね表示）を有効にしている軸 id の集合。
+  const [onionAxes, setOnionAxes] = useState<Set<string>>(new Set());
 
   const groups = listGroups(session.state);
 
@@ -44,6 +48,27 @@ export function VariantsView({
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deferred]);
+
+  // オニオンスキンのプレビュー（軸ごと、有効時のみ）。全別案を重ね、隠れたセルを ghost 表示。
+  const onionKey = [...onionAxes].sort().join(',');
+  const onionThumbs = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const axis of session.axes) {
+      if (!onionAxes.has(axis.id)) continue;
+      const st = onionSkinState(session.state, axis);
+      m.set(axis.id, bufferToDataURL(flattenState(st), ONION_W, ONION_H));
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferred, onionKey]);
+
+  const toggleOnion = (axisId: string) => {
+    setOnionAxes((prev) => {
+      const next = new Set(prev);
+      next.has(axisId) ? next.delete(axisId) : next.add(axisId);
+      return next;
+    });
+  };
 
   const createAxis = () => {
     if (!slotId) return;
@@ -122,6 +147,13 @@ export function VariantsView({
                     </select>
                   )}
                   <button
+                    className={onionAxes.has(axis.id) ? 'on' : ''}
+                    title="オニオンスキン: 全別案を重ねて表示（隠れた案は薄く）。プレビューのみ。"
+                    onClick={() => toggleOnion(axis.id)}
+                  >
+                    👁 重ね
+                  </button>
+                  <button
                     title="現在の見た目を別案セルへ退避し、作業ビューをクリア（非破壊・引き戻し可）"
                     onClick={() => {
                       session.parkSlot(axis.id);
@@ -199,6 +231,13 @@ export function VariantsView({
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {onionAxes.has(axis.id) && axis.cells.length > 0 && (
+                  <div className="var-onion">
+                    <img src={onionThumbs.get(axis.id)} alt="オニオンスキン" />
+                    <span className="hint">重ね表示（表示中＝濃い / 隠れ＝薄い）。プレビューのみ。</span>
                   </div>
                 )}
               </div>

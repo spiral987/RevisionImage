@@ -1310,3 +1310,23 @@ button.active {
   font-size: 11px;
   line-height: 1.4;
 }
+
+.var-axis-head button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.var-onion {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.var-onion img {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: repeating-conic-gradient(#3a3d46 0% 25%, #2f323a 0% 50%) 50% / 12px 12px;
+}
