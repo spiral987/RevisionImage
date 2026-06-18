@@ -76,6 +76,19 @@ export function App() {
     );
   };
 
+  // 時間の読み: 過去の版と「現在の作業状態」を見比べる（CONCEPT §2-4「過去と現在を見比べたい」）。
+  // 現在の作業ログから合成リビジョンを作り、既存 DiffView にそのまま流す（DiffView は label/ops のみ使う）。
+  const compareWithCurrent = (rev: CommittedRevision) => {
+    const current: CommittedRevision = {
+      id: 'current',
+      label: '現在（作業中）',
+      headIds: [],
+      ops: [...session.getLog()],
+      timestamp: Date.now(),
+    };
+    setDiffPair([rev, current]);
+  };
+
   // 読み込み後に dims / 入力欄をセッションへ同期する。
   const syncDims = () => {
     setDims({ w: session.width, h: session.height });
@@ -408,6 +421,16 @@ export function App() {
                     #{i} {r.label}
                   </span>
                   <span className="muted">{r.ops.length} ops</span>
+                  <button
+                    className="rev-compare-cur"
+                    title="この版と現在の作業状態を見比べる"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      compareWithCurrent(r);
+                    }}
+                  >
+                    現在と比較
+                  </button>
                   <button
                     className="rev-checkout"
                     onClick={(e) => {
