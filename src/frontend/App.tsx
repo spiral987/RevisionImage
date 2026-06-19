@@ -14,6 +14,7 @@ import { CanvasEditor } from './CanvasEditor';
 import { DiffView } from './DiffView';
 import { MergeView } from './MergeView';
 import { BoardView } from './BoardView';
+import { RevGView } from './RevGView';
 import { FloatWindow } from './Float';
 
 const SIZE_PRESETS: [number, number][] = [
@@ -36,6 +37,9 @@ export function App() {
   const [diffPair, setDiffPair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
   const [mergePair, setMergePair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // RevG（解像度つき統合グラフ）ウインドウの展開状態。常時マウントしサムネキャッシュを温存し、
+  // active で重い集約/レイアウトだけ切り替える。
+  const [revgOpen, setRevgOpen] = useState(true);
   const [saved, setSaved] = useState(false);
   // Variants の pull（セル→作業）で CanvasEditor のアクティブレイヤーを切り替える信号。
   const [activeReq, setActiveReq] = useState<{ id: string; n: number } | null>(null);
@@ -358,6 +362,43 @@ export function App() {
           onDeleteRevision={(rev) => deleteRev(rev)}
           onActivateLayer={(id) => setActiveReq((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
         />
+      </FloatWindow>
+
+      {/* RevG（解像度つき統合グラフ）: Board とは別ウインドウ。重要度集約のセマンティックズームを残す。 */}
+      <FloatWindow id="nrc-revg" title="RevG" defaultPos={{ right: 12, top: 60 }} className="float-revg">
+        <section className={`fsec ${revgOpen ? 'open' : 'closed'}`}>
+          <div className="fsec-head">
+            <button
+              className="fsec-toggle"
+              onClick={() => setRevgOpen((o) => !o)}
+              title={revgOpen ? '折りたたむ' : '展開'}
+            >
+              {revgOpen ? '−' : '+'}
+              <span className="fsec-title">RevG（解像度つき）</span>
+            </button>
+          </div>
+          <div className="fsec-body" style={{ display: revgOpen ? undefined : 'none' }}>
+            <p className="hint">
+              全リビジョン + 作業中の状態を1つの木に統合。解像度スライダーで重要度集約（セマンティック
+              ズーム）。★=コミット, 青枠=今いる場所。カードクリックで対応領域をハイライト、ダブルクリックで
+              Checkout、ホバーの ⋯ から比較 / マージ / 削除。
+            </p>
+          </div>
+          <RevGView
+            session={session}
+            dag={unifiedDag}
+            revisions={revisions}
+            version={deferredVersion}
+            active={revgOpen}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+            onCheckoutRevision={(rev) => checkout(rev)}
+            onCompareRevisions={(a, b) => setDiffPair([a, b])}
+            onMergeRevisions={(a, b) => setMergePair([a, b])}
+            onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
+            onDeleteRevision={(rev) => deleteRev(rev)}
+          />
+        </section>
       </FloatWindow>
 
       {diffPair && (

@@ -1694,6 +1694,10 @@ button.active {
   width: min(900px, 94vw);
 }
 
+.float-revg {
+  width: min(520px, 92vw);
+}
+
 .board-toolbar {
   display: flex;
   flex-wrap: wrap;
