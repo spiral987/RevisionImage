@@ -1,13 +1,12 @@
 import {
   useDeferredValue,
-  useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
+import { useScrollZoom } from './useScrollZoom';
 import type { EditorSession } from '../session';
 import type { CommittedRevision } from '../backend/revision';
 import type { Operation } from '../types';
@@ -238,87 +237,9 @@ export function BoardView({
     }
   };
 
-  // ---- ズーム（Z 押下＋ポインタ上下ドラッグ。カーソル位置基準でスクロールを補正） ----
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [zoom, setZoom] = useState(1);
-  const zoomRef = useRef(1);
-  zoomRef.current = zoom;
-  const [zHeld, setZHeld] = useState(false);
-  const zoomDragRef = useRef<{ startY: number; z0: number; px: number; py: number; ax: number; ay: number } | null>(
-    null,
-  );
-  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
-
-  useEffect(() => {
-    const isField = (t: EventTarget | null) => {
-      const el = t as HTMLElement | null;
-      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
-    };
-    const down = (e: KeyboardEvent) => {
-      if ((e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey && !isField(e.target)) setZHeld(true);
-    };
-    const up = (e: KeyboardEvent) => {
-      if (e.key === 'z' || e.key === 'Z') setZHeld(false);
-    };
-    const blur = () => setZHeld(false);
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    window.addEventListener('blur', blur);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-      window.removeEventListener('blur', blur);
-    };
-  }, []);
-
-  // ズーム後、カーソル下の点が動かないようスクロール位置を補正する（描画後に適用）。
-  useLayoutEffect(() => {
-    const sc = scrollRef.current;
-    const p = pendingScrollRef.current;
-    if (sc && p) {
-      sc.scrollLeft = p.left;
-      sc.scrollTop = p.top;
-      pendingScrollRef.current = null;
-    }
-  }, [zoom]);
-
-  const onZoomDownCapture = (e: ReactPointerEvent) => {
-    if (!zHeld) return; // 通常時はカードのドラッグ等に通す
-    const sc = scrollRef.current;
-    if (!sc) return;
-    e.preventDefault();
-    e.stopPropagation(); // カードの onDown へ渡さない
-    const rect = sc.getBoundingClientRect();
-    const ax = e.clientX - rect.left;
-    const ay = e.clientY - rect.top;
-    const z0 = zoomRef.current;
-    zoomDragRef.current = {
-      startY: e.clientY,
-      z0,
-      px: (sc.scrollLeft + ax) / z0, // カーソル下の盤面座標
-      py: (sc.scrollTop + ay) / z0,
-      ax,
-      ay,
-    };
-    sc.setPointerCapture?.(e.pointerId);
-  };
-  const onZoomMove = (e: ReactPointerEvent) => {
-    const d = zoomDragRef.current;
-    if (!d) return;
-    const z1 = Math.max(0.2, Math.min(4, d.z0 * Math.pow(1.01, d.startY - e.clientY)));
-    pendingScrollRef.current = { left: d.px * z1 - d.ax, top: d.py * z1 - d.ay };
-    setZoom(z1);
-  };
-  const onZoomUp = (e: ReactPointerEvent) => {
-    if (!zoomDragRef.current) return;
-    try {
-      scrollRef.current?.releasePointerCapture?.(e.pointerId);
-    } catch {
-      /* noop */
-    }
-    zoomDragRef.current = null;
-  };
-  const resetZoom = () => setZoom(1);
+  // ---- ズーム（Z 押下＋ポインタ上下ドラッグ。カーソル位置基準。RevG と共通フック） ----
+  const { scrollRef, zoom, zoomRef, zHeld, onZoomDownCapture, onZoomMove, onZoomUp, resetZoom } =
+    useScrollZoom();
 
   // ---- 操作 ----
   const doCommit = () => {

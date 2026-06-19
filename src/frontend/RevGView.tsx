@@ -12,6 +12,7 @@ import { ROOT_ID } from '../backend/dag';
 import { bufferToDataURL } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
 import { PopoverMenu, type MenuItem } from './Popover';
+import { useScrollZoom } from './useScrollZoom';
 
 const THUMB_W = 104; // サムネ生成サイズ（大きいカードでも粗くならないよう拡大）
 const THUMB_H = 78;
@@ -83,6 +84,8 @@ export const RevGView = memo(function RevGView({
 }) {
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
+  // Z 押下＋ポインタ上下ドラッグでカーソル基準ズーム（Board と共通フック）。
+  const { scrollRef, zoom, zHeld, onZoomDownCapture, onZoomMove, onZoomUp, resetZoom } = useScrollZoom();
 
   // サムネイル(dataURL) と importance 用縮小バッファをノード単位でキャッシュする。
   // 編集で変化するのは末尾ノードだけなので、通常はライブ状態から1枚だけ生成すればよい
@@ -270,6 +273,13 @@ export const RevGView = memo(function RevGView({
         <span className="revg-count">
           {revg.clusters.size} / {totalNodes} nodes
         </span>
+        <span className="revg-toolbar-spacer" />
+        <span className={`keyhint-badge ${zHeld ? 'on' : ''}`} title="Z を押しながら上下ドラッグでズーム">
+          Z＝ズーム
+        </span>
+        <button className="zoom-val" onClick={resetZoom} title="クリックで100%">
+          {Math.round(zoom * 100)}%
+        </button>
       </div>
 
       {pending && (
@@ -283,15 +293,26 @@ export const RevGView = memo(function RevGView({
         </div>
       )}
 
-      <div className="revg-scroll">
-        <div className="revg-stage" style={{ width: stageW, height: stageH }}>
-          {/* 背面: 曲線エッジ（クリックはカードに通すため pointer-events none） */}
-          <svg
-            className="revg-svg"
-            width={stageW}
-            height={stageH}
-            viewBox={`0 0 ${stageW} ${stageH}`}
+      <div
+        className={`revg-scroll ${zHeld ? 'zooming' : ''}`}
+        ref={scrollRef}
+        onPointerDownCapture={onZoomDownCapture}
+        onPointerMove={onZoomMove}
+        onPointerUp={onZoomUp}
+        onPointerCancel={onZoomUp}
+      >
+        <div className="revg-zoom" style={{ width: stageW * zoom, height: stageH * zoom }}>
+          <div
+            className={`revg-stage ${zHeld ? 'zooming' : ''}`}
+            style={{ width: stageW, height: stageH, transform: `scale(${zoom})`, transformOrigin: '0 0' }}
           >
+            {/* 背面: 曲線エッジ（クリックはカードに通すため pointer-events none） */}
+            <svg
+              className="revg-svg"
+              width={stageW}
+              height={stageH}
+              viewBox={`0 0 ${stageW} ${stageH}`}
+            >
             <g transform={`translate(${PAD},${PAD})`}>
               {layout.edges.map((e, i) => (
                 <path
@@ -359,6 +380,7 @@ export const RevGView = memo(function RevGView({
               </div>
             );
           })}
+          </div>
         </div>
       </div>
     </div>

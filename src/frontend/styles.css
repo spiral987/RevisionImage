@@ -947,14 +947,19 @@ button.active {
 
 .revg-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 8px;
   font-size: 12px;
 }
 
 .revg-toolbar input[type='range'] {
-  width: 220px;
+  width: 160px;
+}
+
+.revg-toolbar-spacer {
+  flex: 1 1 auto;
 }
 
 .revg-count {
@@ -964,6 +969,15 @@ button.active {
 
 .revg-stage {
   position: relative;
+}
+
+/* Z 押下中はカードのクリックを無効化（イベントはスクロール側のズーム捕捉へ通す）。 */
+.revg-stage.zooming {
+  pointer-events: none;
+}
+
+.revg-scroll.zooming {
+  cursor: ns-resize;
 }
 
 .revg-scroll {
