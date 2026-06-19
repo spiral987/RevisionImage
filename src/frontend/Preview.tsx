@@ -17,10 +17,17 @@ export interface PreviewReq {
  */
 export function Preview({ req, onClose }: { req: PreviewReq; onClose: () => void }) {
   const hasDiff = !!(req.diffRegion && req.diffRegion.w > 0 && req.diffRegion.h > 0);
-  const [mode, setMode] = useState<'whole' | 'diff'>('whole');
+  // 既定は「差分」（変更箇所が一目で分かる）。全体は上部トグルで。差分領域が無ければ全体のみ。
+  const [mode, setMode] = useState<'whole' | 'diff'>(hasDiff ? 'diff' : 'whole');
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [resizeTick, setResizeTick] = useState(0);
+
+  // 別のノード/セルを開いたら既定（差分があれば差分）に戻す。
+  useEffect(() => {
+    setMode(hasDiff ? 'diff' : 'whole');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [req]);
 
   // Esc で閉じる / ウインドウサイズ変化で再描画。
   useEffect(() => {
