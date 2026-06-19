@@ -11,11 +11,10 @@ import {
   isProjectJSON,
 } from '../backend/repository';
 import { CanvasEditor } from './CanvasEditor';
-import { RevGView } from './RevGView';
 import { DiffView } from './DiffView';
 import { MergeView } from './MergeView';
-import { VariantsView } from './VariantsView';
-import { FloatWindow, Section } from './Float';
+import { BoardView } from './BoardView';
+import { FloatWindow } from './Float';
 
 const SIZE_PRESETS: [number, number][] = [
   [640, 480],
@@ -23,6 +22,9 @@ const SIZE_PRESETS: [number, number][] = [
   [1024, 768],
   [1280, 720],
 ];
+
+// 盤面のレイアウトモデル（ブランチごとに切替）: hybrid=木は自動/差分は自由, free=全部自由配置。
+const BOARD_MODE: 'hybrid' | 'free' = 'free';
 
 export function App() {
   const sessionRef = useRef<EditorSession | null>(null);
@@ -36,11 +38,7 @@ export function App() {
   const [revisions, setRevisions] = useState<CommittedRevision[]>([]);
   const [diffPair, setDiffPair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
   const [mergePair, setMergePair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
-  const [commitLabel, setCommitLabel] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  // REVG（サムネの木）が Revisions の主表示。常時マウントしてサムネイルキャッシュを温存し、
-  // active で描画/集約だけ切り替える（展開のたびに全ノード再生成して固まるのを防ぐ）。
-  const [revgOpen, setRevgOpen] = useState(true);
   const [saved, setSaved] = useState(false);
   // Variants の pull（セル→作業）で CanvasEditor のアクティブレイヤーを切り替える信号。
   const [activeReq, setActiveReq] = useState<{ id: string; n: number } | null>(null);
@@ -65,22 +63,6 @@ export function App() {
       revisions: session.revisions,
       axes: session.axes,
     });
-
-  // 空間→時間の相互ナビ: Variants のセル(出自付き)から元コミットを Revisions の木で選択・スクロール表示。
-  // コミットの head ノード（= グラフ上のカード）を選択し、見える位置へスクロールする。
-  const showRevision = (id: string) => {
-    const rev = session.revisions.find((r) => r.id === id);
-    const head = rev?.headIds[0];
-    setRevgOpen(true);
-    if (head) {
-      setSelectedNodeId(head);
-      requestAnimationFrame(() =>
-        document
-          .getElementById(`nrc-node-${head}`)
-          ?.scrollIntoView({ block: 'nearest', inline: 'nearest' }),
-      );
-    }
-  };
 
   // 時間の読み: 過去の版と「現在の作業状態」を見比べる（CONCEPT §2-4「過去と現在を見比べたい」）。
   // 現在の作業ログから合成リビジョンを作り、既存 DiffView にそのまま流す（DiffView は label/ops のみ使う）。
@@ -227,12 +209,6 @@ export function App() {
     setSelectedNodeId(null);
   };
 
-  const commit = () => {
-    session.commitRevision(commitLabel);
-    setRevisions([...session.revisions]);
-    setCommitLabel('');
-  };
-
   // 現在の作業ログが既存リビジョンのいずれかとして保存済みか（op id 列で判定）。
   const isWorkingSaved = (): boolean => {
     const log = session.getLog();
@@ -366,85 +342,25 @@ export function App() {
         <span className="save-indicator">{saved ? '✓ 保存済み' : ''}</span>
       </div>
 
-      {/* 下部フロートウインドウ: REVISIONS + REVG */}
+      {/* 統合盤面: 時間(コミットの木) + 空間(差分セル) を1枚に（Revisions/Variants の統合実験）。 */}
       <FloatWindow
-        id="nrc-bottom"
-        title="Revisions / Graph"
+        id="nrc-board"
+        title="Board"
         defaultPos={{ left: 12, bottom: 12 }}
-        className="float-bottom"
+        className="float-board"
       >
-        <Section title="REVISIONS" defaultOpen>
-          <div className="rev-commit">
-            <input
-              type="text"
-              placeholder="ラベル（任意）"
-              value={commitLabel}
-              onChange={(e) => setCommitLabel(e.target.value)}
-            />
-            <button onClick={commit} disabled={session.getLog().length === 0}>
-              Commit
-            </button>
-          </div>
-          <p className="hint">
-            {revisions.length === 0
-              ? '「Commit」で現在の状態を版として確定。確定すると下の履歴ツリーにサムネで並びます。'
-              : '下の履歴ツリーが版の一覧です。カードをダブルクリックで Checkout、ホバーの ⋯ から比較 / マージ / 削除。'}
-          </p>
-        </Section>
-
-        {/* REVG は Section で unmount すると展開のたびに全ノードのサムネイルを replay 込みで
-            作り直して重い。常時マウントし、active で描画/集約だけ切り替える。 */}
-        <section className={`fsec ${revgOpen ? 'open' : 'closed'}`}>
-          <div className="fsec-head">
-            <button
-              className="fsec-toggle"
-              onClick={() => setRevgOpen((o) => !o)}
-              title={revgOpen ? '折りたたむ' : '展開'}
-            >
-              {revgOpen ? '−' : '+'}
-              <span className="fsec-title">履歴ツリー</span>
-            </button>
-          </div>
-          <div className="fsec-body" style={{ display: revgOpen ? undefined : 'none' }}>
-            <p className="hint">
-              全リビジョン + 作業中の状態を1つの木に統合表示。サムネ＝各状態、★＝コミット点（版の head）、
-              青枠＝今いる場所。分岐は枝、マージは合流として現れます。カードをクリックで対応領域を
-              ハイライト、ダブルクリックで Checkout、ホバーの ⋯ から比較 / マージ / 削除。
-            </p>
-          </div>
-          <RevGView
-            session={session}
-            dag={unifiedDag}
-            revisions={revisions}
-            version={deferredVersion}
-            active={revgOpen}
-            selectedNodeId={selectedNodeId}
-            onSelectNode={setSelectedNodeId}
-            onCheckoutRevision={(rev) => checkout(rev)}
-            onCompareRevisions={(a, b) => setDiffPair([a, b])}
-            onMergeRevisions={(a, b) => setMergePair([a, b])}
-            onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
-            onDeleteRevision={(rev) => deleteRev(rev)}
-          />
-        </section>
-      </FloatWindow>
-
-      {/* 空間の読み（差分制作）: 軸×セルの行列。時間の読み（Revisions）とは別ウインドウ。 */}
-      <FloatWindow
-        id="nrc-variants"
-        title="Variants / 差分"
-        defaultPos={{ right: 12, bottom: 12 }}
-        className="float-variants"
-      >
-        <Section title="VARIANTS" defaultOpen>
-          <VariantsView
-            session={session}
-            version={version}
-            onEdit={onEdit}
-            onActivateLayer={(id) => setActiveReq((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
-            onShowRevision={showRevision}
-          />
-        </Section>
+        <BoardView
+          session={session}
+          version={version}
+          mode={BOARD_MODE}
+          onEdit={onEdit}
+          onCheckout={(rev) => checkout(rev)}
+          onCompareRevisions={(a, b) => setDiffPair([a, b])}
+          onMergeRevisions={(a, b) => setMergePair([a, b])}
+          onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
+          onDeleteRevision={(rev) => deleteRev(rev)}
+          onActivateLayer={(id) => setActiveReq((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
+        />
       </FloatWindow>
 
       {diffPair && (

@@ -1612,3 +1612,108 @@ button.active {
   width: 12px;
   color: var(--accent);
 }
+
+/* ===== Board（時間の木 + 空間の差分セルを1枚に統合した実験UI） ===== */
+.float-board {
+  width: min(900px, 94vw);
+}
+
+.board-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.board-toolbar input[type='text'] {
+  flex: 1 1 140px;
+  min-width: 100px;
+}
+
+.board-mode {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.board-mode.hybrid {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.board-mode.free {
+  border-color: #f2994a;
+  color: #f2994a;
+}
+
+.board-spacer {
+  flex: 1 1 auto;
+}
+
+.board-scroll {
+  margin-top: 8px;
+  max-height: min(620px, 70vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(45deg, #23252b 25%, transparent 25%),
+    linear-gradient(-45deg, #23252b 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #23252b 75%),
+    linear-gradient(-45deg, transparent 75%, #23252b 75%);
+  background-size: 20px 20px;
+  background-position:
+    0 0,
+    0 10px,
+    10px -10px,
+    -10px 0;
+}
+
+.board-stage {
+  position: relative;
+}
+
+.board-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.board-edge {
+  stroke: #59616f;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.board-srcline {
+  stroke: var(--accent);
+  stroke-width: 1.3;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+}
+
+.board-card {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+
+.board-card.draggable {
+  cursor: grab;
+}
+
+.board-card.draggable:active {
+  cursor: grabbing;
+}
+
+.board-axis-tag {
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
