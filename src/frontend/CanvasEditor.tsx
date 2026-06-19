@@ -223,6 +223,7 @@ export function CanvasEditor({
   const [tool, setTool] = useState<Tool>('brush');
   const [sizeAdjust, setSizeAdjust] = useState(false); // S キー押下中 = 太さ調整モード
   const [zoomKey, setZoomKey] = useState(false); // Z キー押下中 = ズームモード
+  const [spaceHeld, setSpaceHeld] = useState(false); // Space 長押し = 視点移動（パン）モード
   const [color, setColor] = useState('#e23b3b');
   // size はツールごとに保持する（Brush と Eraser で別々の太さを記憶）。
   const [sizes, setSizes] = useState<Record<string, number>>({ brush: 6, eraser: 16, line: 4, rect: 4 });
@@ -442,14 +443,20 @@ export function CanvasEditor({
       if (e.ctrlKey || e.metaKey || isField(e.target)) return;
       if (e.key === 's' || e.key === 'S') setSizeAdjust(true);
       if (e.key === 'z' || e.key === 'Z') setZoomKey(true);
+      if (e.key === ' ') {
+        setSpaceHeld(true);
+        e.preventDefault(); // ページスクロール/ボタン誤発火を防ぐ
+      }
     };
     const up = (e: KeyboardEvent) => {
       if (e.key === 's' || e.key === 'S') setSizeAdjust(false);
       if (e.key === 'z' || e.key === 'Z') setZoomKey(false);
+      if (e.key === ' ') setSpaceHeld(false);
     };
     const reset = () => {
       setSizeAdjust(false);
       setZoomKey(false);
+      setSpaceHeld(false);
     };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
@@ -932,6 +939,13 @@ export function CanvasEditor({
   const onPointerDown = (e: ReactPointerEvent) => {
     // 中ボタンドラッグ = パン（ツール・キャンバスが収まっているかに関係なく視点移動）。
     if (e.button === 1) {
+      e.preventDefault();
+      panningRef.current = { x: e.clientX, y: e.clientY, left: panRef.current.x, top: panRef.current.y };
+      canvasRef.current?.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    // Space 長押し（視点移動モード）: ドラッグでパン（描画せず視点だけ動かす）。
+    if (spaceHeld) {
       e.preventDefault();
       panningRef.current = { x: e.clientX, y: e.clientY, left: panRef.current.x, top: panRef.current.y };
       canvasRef.current?.setPointerCapture?.(e.pointerId);
@@ -1777,7 +1791,10 @@ export function CanvasEditor({
 
   return (
     <div className="editor" ref={paneRef}>
-      <div className={`canvas-viewport ${zoomKey ? 'zoom-mode' : ''}`} ref={viewportRef}>
+      <div
+        className={`canvas-viewport ${zoomKey ? 'zoom-mode' : ''} ${spaceHeld ? 'pan-mode' : ''}`}
+        ref={viewportRef}
+      >
         <div className="canvas-pan" style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}>
           <canvas
             ref={canvasRef}
@@ -1840,6 +1857,9 @@ export function CanvasEditor({
         <button onClick={fitZoom}>Fit</button>
         <span className={`keyhint-badge ${zoomKey ? 'on' : ''}`} title="Z を押しながらキャンバスを上下ドラッグでズーム">
           Z＋上下ドラッグ＝ズーム
+        </span>
+        <span className={`keyhint-badge ${spaceHeld ? 'on' : ''}`} title="Space を押しながらドラッグで視点移動">
+          Space＝視点移動
         </span>
         <span className="cb-sep" />
         <span className="history-label">history</span>

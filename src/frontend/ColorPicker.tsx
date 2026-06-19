@@ -52,12 +52,12 @@ const hsvToHex = (h: number, s: number, v: number) => rgbToHex(...hsvToRgb(h, s,
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
-// ジオメトリ（CSS と一致させる）
-const WHEEL = 140; // 色相環の直径
-const R_OUTER = WHEEL / 2; // 70
-const R_INNER = 44; // 穴の半径（mask と一致）
+// ジオメトリ。穴の半径(R_INNER)はリングの mask をインライン指定するので JS 側が単一の真実。
+const WHEEL = 200; // 色相環の直径（拡大）
+const R_OUTER = WHEEL / 2; // 100
+const R_INNER = 64; // 穴の半径（cp-hue-ring の mask に反映）
 const R_THUMB = (R_OUTER + R_INNER) / 2; // 色相つまみ位置
-const SV = 60; // SV 正方形の一辺
+const SV = 88; // SV 正方形の一辺（内円に収まる）
 const PALETTE_KEY = 'nrc-palette';
 const PALETTE_MAX = 24;
 
@@ -151,6 +151,44 @@ export function ColorPicker({ color, onChange }: { color: string; onChange: (hex
   const thumbY = R_OUTER - R_THUMB * Math.cos(hueRad);
   const hueHex = hsvToHex(hsv.h, 1, 1);
 
+  // RGB/HSV スライダー。RGB は現在の HSV から導出し、変更時は HSV へ戻す（グレーでは色相を保つ）。
+  const [r, g, b] = hsvToRgb(hsv.h, hsv.s, hsv.v).map((x) => Math.round(x)) as [number, number, number];
+  const applyRgb = (nr: number, ng: number, nb: number) => {
+    const next = rgbToHsv(nr, ng, nb);
+    if (next.s === 0) next.h = hsvRef.current.h; // 無彩色で色相を失わない
+    apply(next);
+  };
+  const svHex = (s: number, v: number) => hsvToHex(hsv.h, s, v);
+
+  // 1 本のスライダー行（色付きトラック + 数値入力）。
+  const slider = (
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    track: string,
+    set: (v: number) => void,
+  ) => (
+    <div className="cp-slider">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        style={{ background: track }}
+        onChange={(e) => set(Number(e.target.value))}
+      />
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => set(Number(e.target.value))}
+      />
+    </div>
+  );
+
   return (
     <div className="color-picker">
       <div className="cp-top">
@@ -163,7 +201,13 @@ export function ColorPicker({ color, onChange }: { color: string; onChange: (hex
           onPointerUp={() => (hueDragRef.current = false)}
           onPointerCancel={() => (hueDragRef.current = false)}
         >
-          <div className="cp-hue-ring" />
+          <div
+            className="cp-hue-ring"
+            style={{
+              WebkitMaskImage: `radial-gradient(circle at center, transparent 0 ${R_INNER}px, #000 ${R_INNER}px)`,
+              maskImage: `radial-gradient(circle at center, transparent 0 ${R_INNER}px, #000 ${R_INNER}px)`,
+            }}
+          />
           <div
             className="cp-hue-thumb"
             style={{ left: thumbX, top: thumbY, background: hueHex }}
@@ -189,6 +233,44 @@ export function ColorPicker({ color, onChange }: { color: string; onChange: (hex
             />
           </div>
         </div>
+      </div>
+
+      <div className="cp-sliders">
+        <div className="cp-group-label">RGB</div>
+        {slider('R', r, 0, 255, `linear-gradient(to right, rgb(0,${g},${b}), rgb(255,${g},${b}))`, (v) =>
+          applyRgb(v, g, b),
+        )}
+        {slider('G', g, 0, 255, `linear-gradient(to right, rgb(${r},0,${b}), rgb(${r},255,${b}))`, (v) =>
+          applyRgb(r, v, b),
+        )}
+        {slider('B', b, 0, 255, `linear-gradient(to right, rgb(${r},${g},0), rgb(${r},${g},255))`, (v) =>
+          applyRgb(r, g, v),
+        )}
+        <div className="cp-group-label">HSV</div>
+        {slider(
+          'H',
+          Math.round(hsv.h),
+          0,
+          360,
+          'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)',
+          (v) => apply({ ...hsvRef.current, h: v }),
+        )}
+        {slider(
+          'S',
+          Math.round(hsv.s * 100),
+          0,
+          100,
+          `linear-gradient(to right, ${svHex(0, hsv.v)}, ${svHex(1, hsv.v)})`,
+          (v) => apply({ ...hsvRef.current, s: v / 100 }),
+        )}
+        {slider(
+          'V',
+          Math.round(hsv.v * 100),
+          0,
+          100,
+          `linear-gradient(to right, #000, ${svHex(hsv.s, 1)})`,
+          (v) => apply({ ...hsvRef.current, v: v / 100 }),
+        )}
       </div>
 
       <div className="cp-row">

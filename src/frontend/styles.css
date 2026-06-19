@@ -291,6 +291,17 @@ body {
   cursor: ns-resize !important;
 }
 
+/* Space 長押し（視点移動モード）は掴むカーソルに。 */
+.canvas-viewport.pan-mode,
+.canvas-viewport.pan-mode canvas {
+  cursor: grab !important;
+}
+
+.canvas-viewport.pan-mode:active,
+.canvas-viewport.pan-mode canvas:active {
+  cursor: grabbing !important;
+}
+
 /* ブラシ/消しゴムのサイズを示すリングカーソル（pointer に追従、当たり判定なし） */
 .brush-cursor {
   position: absolute;
@@ -508,8 +519,7 @@ button.active {
     hsl(300 100% 50%),
     hsl(360 100% 50%)
   );
-  -webkit-mask: radial-gradient(circle at center, transparent 0 44px, #000 44px);
-  mask: radial-gradient(circle at center, transparent 0 44px, #000 44px);
+  /* 穴の mask は ColorPicker 側でインライン指定（R_INNER と一致させるため）。 */
   pointer-events: none;
 }
 
@@ -541,6 +551,66 @@ button.active {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   transform: translate(-50%, -50%);
   pointer-events: none;
+}
+
+/* RGB / HSV スライダー */
+.cp-sliders {
+  margin-top: 10px;
+  display: grid;
+  gap: 5px;
+}
+
+.cp-group-label {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  margin-top: 4px;
+}
+
+.cp-slider {
+  display: grid;
+  grid-template-columns: 12px 1fr 44px;
+  align-items: center;
+  gap: 6px;
+}
+
+.cp-slider > span {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.cp-slider input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.cp-slider input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 16px;
+  border-radius: 3px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+
+.cp-slider input[type='number'] {
+  width: 100%;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 2px 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .cp-row {
