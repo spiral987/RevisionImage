@@ -18,6 +18,7 @@ import { layoutNodes } from '../backend/filters/layout';
 import { bufferToDataURL, THUMB_SCALE } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
 import { PopoverMenu, type MenuItem } from './Popover';
+import { Preview, type PreviewReq } from './Preview';
 
 const CARD = 136; // カードのサムネ表示幅
 const CARD_H = Math.round(CARD * 0.75);
@@ -78,6 +79,7 @@ export function BoardView({
   const [commitLabel, setCommitLabel] = useState('');
   const [slotId, setSlotId] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewReq | null>(null);
   const [pending, setPending] = useState<{ action: 'compare' | 'merge'; from: CommittedRevision } | null>(
     null,
   );
@@ -316,6 +318,31 @@ export function BoardView({
   };
   const groups = listGroups(session.state);
 
+  // 原寸プレビュー: 木ノードはその状態を replay、セルは合成。差分領域は「直近 op の region」。
+  const openTreePreview = (id: string, rev: CommittedRevision | null) => {
+    const lastRegion = (ops: readonly Operation[]) => (ops.length ? ops[ops.length - 1].region : null);
+    let buffer;
+    let diffRegion = null;
+    let title;
+    if (id === ROOT) {
+      buffer = flattenState(createInitialState(session.width, session.height));
+      title = '起点';
+    } else if (rev) {
+      const st = new Replayer(session.width, session.height).replayAll(rev.ops);
+      buffer = flattenState(st[rev.ops.length]);
+      diffRegion = lastRegion(rev.ops);
+      title = `#${indexOfRev(rev)} ${rev.label}`;
+    } else {
+      buffer = flattenState(session.state); // WORK
+      diffRegion = lastRegion(log);
+      title = '現在（作業中）';
+    }
+    setPreview({ title, buffer, diffRegion });
+  };
+  const openCellPreview = (axis: (typeof session.axes)[number], cellId: string, name: string) => {
+    setPreview({ title: name, buffer: flattenState(cellPreviewState(session.state, axis, cellId)) });
+  };
+
   return (
     <div className="board">
       <div className="board-toolbar">
@@ -435,6 +462,11 @@ export function BoardView({
                   badge={isCommit ? <span className="revg-star">★</span> : isCurrent ? <span className="revg-now">●</span> : undefined}
                   onActivate={() => onNodeClick(id, rev)}
                   onDoubleClick={isCommit ? () => onCheckout(rev!) : undefined}
+                  hoverActions={
+                    <button className="tc-act" title="原寸プレビュー" onClick={() => openTreePreview(id, rev)}>
+                      🔍
+                    </button>
+                  }
                   cornerMenu={
                     isCommit ? (
                       <PopoverMenu className="revg-card-menu" title="このコミットの操作" items={commitMenu(rev!)} />
@@ -489,6 +521,15 @@ export function BoardView({
                         {!dead && (
                           <button
                             className="tc-act"
+                            title="原寸プレビュー"
+                            onClick={() => openCellPreview(axis, cell.id, cell.name)}
+                          >
+                            🔍
+                          </button>
+                        )}
+                        {!dead && (
+                          <button
+                            className="tc-act"
                             title="このセルを作業対象として編集（pull）"
                             onClick={() => {
                               const leaf = session.pullCellToWorking(axis.id, cell.id);
@@ -528,6 +569,7 @@ export function BoardView({
           </div>
         </div>
       </div>
+      {preview && <Preview req={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }

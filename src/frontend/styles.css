@@ -1744,6 +1744,7 @@ button.active {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .float-board .board-scroll {
@@ -1764,6 +1765,75 @@ button.active {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+/* ===== 原寸プレビュー（Board/RevG ウインドウ内オーバーレイ） ===== */
+.node-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 16, 20, 0.82);
+  backdrop-filter: blur(2px);
+  border-radius: 8px;
+}
+
+.np-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px 8px 0 0;
+}
+
+.np-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-toggle {
+  display: flex;
+  gap: 2px;
+  margin-left: 6px;
+}
+
+.np-toggle button {
+  padding: 2px 9px;
+  font-size: 11px;
+}
+
+.np-toggle button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.np-close {
+  margin-left: auto;
+  padding: 2px 9px;
+}
+
+.np-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 10px;
+  background: repeating-conic-gradient(#3a3d46 0% 25%, #2f323a 0% 50%) 50% / 16px 16px;
+}
+
+.np-body canvas {
+  display: block;
+  border-radius: 4px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
 }
 
 .float-revg .revg-scroll {

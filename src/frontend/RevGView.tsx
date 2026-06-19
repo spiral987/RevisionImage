@@ -13,6 +13,7 @@ import { bufferToDataURL, THUMB_SCALE } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
 import { PopoverMenu, type MenuItem } from './Popover';
 import { useScrollZoom } from './useScrollZoom';
+import { Preview, type PreviewReq } from './Preview';
 
 const NODE_THUMB = 88; // カードのサムネ表示幅
 // 生成解像度＝表示の THUMB_SCALE 倍（高DPI・軽ズームで滲まない）。合成は元々フル解像度なので軽い。
@@ -91,6 +92,7 @@ export const RevGView = memo(function RevGView({
 }) {
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
+  const [preview, setPreview] = useState<PreviewReq | null>(null);
   // Z 押下＋ポインタ上下ドラッグでカーソル基準ズーム（Board と共通フック）。
   const { scrollRef, zoom, zHeld, onZoomDownCapture, onZoomMove, onZoomUp, resetZoom } = useScrollZoom();
 
@@ -224,6 +226,18 @@ export const RevGView = memo(function RevGView({
   };
 
   const indexOfRev = (rev: CommittedRevision) => revisions.findIndex((r) => r.id === rev.id);
+
+  // 原寸プレビューを開く: opsUpTo でその点の状態を1回 replay→合成。差分領域はそのノードの op.region。
+  const openPreview = (cluster: RevGCluster) => {
+    const ops = session.opsUpTo(cluster.id) ?? [];
+    const states = new Replayer(session.width, session.height).replayAll(ops);
+    const buffer = flattenState(states[ops.length]);
+    const rev = revByHead.get(cluster.id);
+    const title = rev
+      ? `#${indexOfRev(rev)} ${rev.label}`
+      : labelOf(cluster.op, cluster.memberIds.length);
+    setPreview({ title, buffer, diffRegion: cluster.id === ROOT_ID ? null : cluster.op.region });
+  };
 
   // コミットカードの ⋯ メニュー（Quickpose の右クリックメニュー相当）。
   const commitMenu = (rev: CommittedRevision): MenuItem[] => [
@@ -404,6 +418,11 @@ export const RevGView = memo(function RevGView({
                   badge={badge}
                   onActivate={() => onNodeClick(cluster.id)}
                   onDoubleClick={isCommit ? () => onCheckoutRevision(rev!) : undefined}
+                  hoverActions={
+                    <button className="tc-act" title="原寸プレビュー" onClick={() => openPreview(cluster)}>
+                      🔍
+                    </button>
+                  }
                   cornerMenu={
                     menuItems.length > 0 ? (
                       <PopoverMenu className="revg-card-menu" title="操作" items={menuItems} />
@@ -416,6 +435,7 @@ export const RevGView = memo(function RevGView({
           </div>
         </div>
       </div>
+      {preview && <Preview req={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 });
