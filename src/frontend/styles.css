@@ -1009,6 +1009,24 @@ button.active {
   stroke-linejoin: round;
 }
 
+/* エッジのクリック判定（透明な太線）。ホバーで青く光らせ「ここから分岐」を示す。 */
+.revg-edge-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  stroke-linecap: round;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.revg-edge-hit:hover {
+  stroke: rgba(91, 157, 255, 0.4);
+}
+
+/* ズーム中はエッジのクリックも無効化（スクロール側のズーム捕捉へ通す）。 */
+.revg-stage.zooming .revg-edge-hit {
+  pointer-events: none;
+}
+
 /* 履歴ツリーのカード（ThumbCard を node 中心に絶対配置）。 */
 .revg-card-pos {
   position: absolute;
@@ -1706,10 +1724,52 @@ button.active {
 /* ===== Board（時間の木 + 空間の差分セルを1枚に統合した実験UI） ===== */
 .float-board {
   width: min(900px, 94vw);
+  height: min(600px, 80vh);
 }
 
 .float-revg {
   width: min(520px, 92vw);
+  height: min(560px, 80vh);
+}
+
+/* ウインドウの縦サイズに内側スクロールを追従させる（リサイズで中身も伸縮）。 */
+.float-board .float-content,
+.float-revg .float-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.float-board .board {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.float-board .board-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.float-revg .fsec.open {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.float-revg .revg {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.float-revg .revg-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .board-toolbar {

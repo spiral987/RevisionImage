@@ -64,6 +64,7 @@ export const RevGView = memo(function RevGView({
   onCompareWithCurrent,
   onDeleteRevision,
   onSelectiveUndo,
+  onBranchFrom,
 }: {
   session: EditorSession;
   // 統合DAG（全リビジョン + 作業ログを重ねたもの）。
@@ -84,6 +85,8 @@ export const RevGView = memo(function RevGView({
   onDeleteRevision: (rev: CommittedRevision) => void;
   // selective undo: 作業ログ上の操作（とその依存）を無かったことにする（原論文）。
   onSelectiveUndo: (opIds: string[]) => void;
+  // 任意ノード/エッジから新しいブランチを始める（その点までを作業ログにして以後の編集を分岐）。
+  onBranchFrom: (nodeId: string) => void;
 }) {
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
@@ -319,14 +322,23 @@ export const RevGView = memo(function RevGView({
               viewBox={`0 0 ${stageW} ${stageH}`}
             >
             <g transform={`translate(${PAD},${PAD})`}>
-              {layout.edges.map((e, i) => (
-                <path
-                  key={`${e.from}->${e.to}-${i}`}
-                  className="revg-edge"
-                  d={smoothPath(e.points)}
-                  fill="none"
-                />
-              ))}
+              {layout.edges.map((e, i) => {
+                const d = smoothPath(e.points);
+                return (
+                  <g key={`${e.from}->${e.to}-${i}`}>
+                    <path className="revg-edge" d={d} fill="none" />
+                    {/* 透明な太線でクリック判定。上流ノード(from)からブランチを開始。 */}
+                    <path
+                      className="revg-edge-hit"
+                      d={d}
+                      fill="none"
+                      onClick={() => onBranchFrom(e.from)}
+                    >
+                      <title>ここから新しいブランチを始める</title>
+                    </path>
+                  </g>
+                );
+              })}
             </g>
           </svg>
 
@@ -357,6 +369,14 @@ export const RevGView = memo(function RevGView({
             // カードの ⋯ メニュー: コミット操作 ＋（作業ログ上なら）selective undo。
             const undoTargets = [cluster.id, ...cluster.memberIds].filter((id) => workingIds.has(id));
             const menuItems: MenuItem[] = isCommit ? commitMenu(rev!) : [];
+            // 非コミットノードにも「ここから分岐」（コミットは Checkout が同義なので付けない）。
+            if (!isCommit && cluster.id !== ROOT_ID) {
+              menuItems.push({
+                label: 'ここから新しいブランチ',
+                title: 'この時点までを作業ログにして、以後の編集を新しい線として分岐する',
+                onClick: () => onBranchFrom(cluster.id),
+              });
+            }
             if (undoTargets.length > 0) {
               menuItems.push({
                 label: 'この操作を取り消す（依存も除去）',

@@ -271,6 +271,18 @@ export function App() {
     setVersion((v) => v + 1);
   };
 
+  // RevG の任意ノード/エッジから新しいブランチを始める（その点までを作業ログにして以後の編集を分岐）。
+  // checkout(rev) と同じく未コミット作業は自動チェックポイントしてから切り替える。
+  const branchFrom = (nodeId: string) => {
+    const ops = session.opsUpTo(nodeId);
+    if (!ops) return;
+    autoCheckpointIfDirty();
+    session.checkout(ops);
+    setRevisions([...session.revisions]);
+    setSelectedNodeId(null);
+    setVersion((v) => v + 1);
+  };
+
   const onMerged = (mergedOps: Operation[], label: string) => {
     autoCheckpointIfDirty(); // マージ確定も作業ログを置き換えるので、未コミット作業を先に保存
     session.checkout(mergedOps);
@@ -415,6 +427,7 @@ export function App() {
             onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
             onDeleteRevision={(rev) => deleteRev(rev)}
             onSelectiveUndo={doSelectiveUndo}
+            onBranchFrom={branchFrom}
           />
         </section>
       </FloatWindow>

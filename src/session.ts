@@ -223,6 +223,24 @@ export class EditorSession {
     return true;
   }
 
+  /**
+   * 指定ノード（op id）までの操作列を、それを含むブランチから切り出す（作業ログ優先→各リビジョン）。
+   * RevG の任意点（ノード/エッジ）から新しいブランチを始めるための prefix。
+   * root は空列、どのブランチにも無ければ null。これを checkout すればその点から分岐できる。
+   */
+  opsUpTo(nodeId: string): Operation[] | null {
+    if (nodeId === ROOT_ID) return [];
+    const branches: readonly Operation[][] = [
+      [...this.getLog()],
+      ...this.revisions.map((r) => [...r.ops]),
+    ];
+    for (const ops of branches) {
+      const idx = ops.findIndex((o) => o.id === nodeId);
+      if (idx >= 0) return ops.slice(0, idx + 1);
+    }
+    return null;
+  }
+
   /** 現在の操作列をリビジョンとして確定（commit / check-in）する。 */
   commitRevision(label?: string): CommittedRevision {
     const ops = this.getLog().map((o) => o); // スナップショット（凍結）
