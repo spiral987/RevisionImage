@@ -627,20 +627,26 @@ export function CanvasEditor({
   const getActiveLayer = (): Layer | undefined => getLayer(session.state, activeLayerId);
 
   // スポイト: 合成結果から1画素を読み、色に設定（操作はログしない読み取り専用）。
-  const pickColor = (x: number, y: number) => {
-    const flat = flattenState(session.state);
+  // 合成画像から1ピクセルの色を hex で取り出す（副作用なし）。スポイト各種で共用。
+  const hexAt = (flat: ImageBuffer, x: number, y: number): string | null => {
     const xi = Math.floor(x);
     const yi = Math.floor(y);
-    if (xi < 0 || yi < 0 || xi >= flat.width || yi >= flat.height) return;
+    if (xi < 0 || yi < 0 || xi >= flat.width || yi >= flat.height) return null;
     const i = (yi * flat.width + xi) * 4;
-    const hex =
-      '#' +
-      [flat.data[i], flat.data[i + 1], flat.data[i + 2]]
-        .map((v) => v.toString(16).padStart(2, '0'))
-        .join('');
+    const h = (v: number) => v.toString(16).padStart(2, '0');
+    return `#${h(flat.data[i])}${h(flat.data[i + 1])}${h(flat.data[i + 2])}`;
+  };
+
+  const pickColor = (x: number, y: number) => {
+    const hex = hexAt(flattenState(session.state), x, y);
+    if (!hex) return;
     setColor(hex);
     setTool('brush'); // 採取後はブラシへ（一般的な挙動）
   };
+
+  // 右ボタン長押し中の一時スポイト。押下時の合成画像を1枚控え、移動でライブ採取、離した位置で確定する。
+  // （ツールは切り替えない一時オーバーライド。長押し中だけ有効。）
+  const rightPickRef = useRef<ImageBuffer | null>(null);
 
   // 塗りつぶし: 影響領域を先に算出して region に渡し、fill 操作を適用する。
   const doFill = (x: number, y: number) => {
@@ -937,6 +943,7 @@ export function CanvasEditor({
   };
 
   const onPointerDown = (e: ReactPointerEvent) => {
+    if (rightPickRef.current) return; // スポイト中は他の操作を始めない
     // 中ボタンドラッグ = パン（ツール・キャンバスが収まっているかに関係なく視点移動）。
     if (e.button === 1) {
       e.preventDefault();
@@ -956,6 +963,19 @@ export function CanvasEditor({
       e.preventDefault();
       zoomDragRef.current = { startY: e.clientY, startZoom: zoomRef.current, anchorX: e.clientX, anchorY: e.clientY };
       canvasRef.current?.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    // 右ボタン長押し = 一時スポイト。押下時の合成画像を控え、移動でライブ採取、離した位置で確定。
+    if (e.button === 2) {
+      e.preventDefault();
+      const c = canvasRef.current!;
+      c.setPointerCapture?.(e.pointerId);
+      const flat = flattenState(session.state);
+      rightPickRef.current = flat;
+      const pt = getPoint(e);
+      const hex = hexAt(flat, pt.x, pt.y);
+      if (hex) setColor(hex);
+      c.style.cursor = 'crosshair';
       return;
     }
     if (previewing) return;
@@ -1025,6 +1045,13 @@ export function CanvasEditor({
       const d = panningRef.current;
       setPan(clampPan({ x: d.left + (e.clientX - d.x), y: d.top + (e.clientY - d.y) }));
       if (showCursor) moveCursor(e.clientX, e.clientY); // パン中もリングカーソルを追従させる
+      return;
+    }
+    // 右ボタンスポイト中: 控えた合成画像からカーソル位置の色をライブ採取。
+    if (rightPickRef.current) {
+      const pt = getPoint(e);
+      const hex = hexAt(rightPickRef.current, pt.x, pt.y);
+      if (hex) setColor(hex);
       return;
     }
     // ズームドラッグ中: 上=拡大 / 下=縮小。押下時のカーソル位置を基準に保つ（zoomToAnchor）。
@@ -1102,6 +1129,16 @@ export function CanvasEditor({
   const onPointerUp = (e: ReactPointerEvent) => {
     if (panningRef.current) {
       panningRef.current = null;
+      return;
+    }
+    // 右ボタンスポイト確定: 離した位置の色を採取してブラシ色に。ツールは変えない。
+    if (rightPickRef.current) {
+      const pt = getPoint(e);
+      const hex = hexAt(rightPickRef.current, pt.x, pt.y);
+      if (hex) setColor(hex);
+      rightPickRef.current = null;
+      const c = canvasRef.current;
+      if (c) c.style.cursor = '';
       return;
     }
     if (zoomDragRef.current) {
@@ -1812,6 +1849,7 @@ export function CanvasEditor({
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
+            onContextMenu={(e) => e.preventDefault()} // 右ボタンはスポイトに使うのでメニューを出さない
             onPointerEnter={(e) => {
               setHovering(true);
               moveCursor(e.clientX, e.clientY);
