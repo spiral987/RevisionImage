@@ -1,21 +1,24 @@
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorSession } from '../session';
 import { flattenState } from '../engine/composite';
 import { getNode } from '../engine/editorState';
 import { isGroup } from '../engine/layer';
 import { cellPreviewState, listGroups, onionSkinState } from '../backend/variant';
 import { bufferToDataURL } from './thumbnail';
+import { ThumbCard } from './ThumbCard';
+import { PopoverMenu, type MenuItem } from './Popover';
 
-const THUMB_W = 72;
-const THUMB_H = 54;
-const ONION_W = 220;
-const ONION_H = 160;
+const THUMB_W = 128;
+const THUMB_H = 96;
+const CARD = 100; // セルカードのサムネ表示幅
+const ONION_W = 240;
+const ONION_H = 170;
 
 /**
- * 空間の読み（差分制作 / Variants）UI（CONCEPT §3.3 層1 の空間UI）。
- * 行＝軸、列＝セルのサムネイル行列で「対等な別案」を読む。フラットなレイヤーリスト
- * （Layer Comp の反面教師）でなく、差し替え点(slot)ごとに束ねて見せる。
- * セル選択は session.selectCell（= setLayerVisibility op）に落ちるので版に焼ける。
+ * 空間の読み（差分制作 / Variants）UI。Quickpose 流「サムネ第一」棚。
+ * 1 軸＝大きいサムネカード（ThumbCard）の横一列の棚。カードクリックで表示トグル、
+ * 名前はインライン改名、稀な操作（pull/出自ナビ/外す/同期/退避/版から取り込み）はホバー or ⋯ に畳む。
+ * セル切替は session.toggleCell（= setLayerVisibility op）に落ちるので版に焼ける。
  */
 export function VariantsView({
   session,
@@ -37,6 +40,19 @@ export function VariantsView({
   const [slotId, setSlotId] = useState('');
   // オニオンスキン（重ね表示）を有効にしている軸 id の集合。
   const [onionAxes, setOnionAxes] = useState<Set<string>>(new Set());
+  // 「＋版から取り込み」のリビジョン選択を開いている軸 id。
+  const [pickRevAxis, setPickRevAxis] = useState<string | null>(null);
+  // インライン改名中の軸 id。
+  const [editAxis, setEditAxis] = useState<string | null>(null);
+  const [axisDraft, setAxisDraft] = useState('');
+  const axisInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editAxis && axisInputRef.current) {
+      axisInputRef.current.focus();
+      axisInputRef.current.select();
+    }
+  }, [editAxis]);
 
   const groups = listGroups(session.state);
 
@@ -79,21 +95,32 @@ export function VariantsView({
     const axis = session.addAxis(name, slotId);
     session.syncAxisCells(axis.id); // slot 直下の子を初期セルに取り込む
     setName('');
+    setSlotId('');
+    onEdit();
+  };
+
+  const commitAxisName = (axisId: string) => {
+    setEditAxis(null);
+    session.renameAxis(axisId, axisDraft);
     onEdit();
   };
 
   return (
     <div className="variants">
-      {/* 新規軸の作成（差し替え点を選ぶ） */}
+      <p className="hint">
+        レイヤーパネルで別案レイヤーを選び（Ctrl/⌘+クリックで複数）「→ Variants」で軸を作るのが簡単です
+        （フォルダ不要）。フォルダ単位でまとめたい時は下から差し替え点フォルダを選んでも作れます。
+      </p>
+      {/* フォルダから軸を作る（任意）。差し替え点フォルダの子をセルにする。 */}
       <div className="var-new">
         <input
           type="text"
-          placeholder="軸の名前（例: 目）"
+          placeholder="軸の名前（任意）"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <select value={slotId} onChange={(e) => setSlotId(e.target.value)}>
-          <option value="">差し替え点（フォルダ）…</option>
+          <option value="">フォルダから作る…</option>
           {groups.map((g) => (
             <option key={g.id} value={g.id}>
               {'　'.repeat(g.depth)}
@@ -102,182 +129,213 @@ export function VariantsView({
           ))}
         </select>
         <button onClick={createAxis} disabled={!slotId}>
-          軸を追加
+          追加
         </button>
       </div>
 
-      {groups.length === 0 && (
-        <p className="hint">
-          差分の差し替え点は「フォルダ」で宣言します。まずレイヤーをフォルダにまとめて、その中に
-          別案レイヤーを入れてください。
-        </p>
-      )}
-
       {session.axes.length === 0 ? (
         <p className="hint">
-          軸はまだありません。別案を入れたフォルダを差し替え点に選んで「軸を追加」すると、フォルダ内の
-          レイヤーが別案セルとして並びます。択一＝1つだけ表示、トグル＝各々を独立に on/off。
+          軸はまだありません。各セルは独立にトグル（表示/非表示）できます。
         </p>
       ) : (
         <div className="var-axes">
           {session.axes.map((axis) => {
-            const slotNode = getNode(session.state, axis.slotId);
-            const slotBroken = !slotNode || !isGroup(slotNode);
+            const isSlotless = !axis.slotId;
+            const slotNode = axis.slotId ? getNode(session.state, axis.slotId) : undefined;
+            const slotBroken = !isSlotless && (!slotNode || !isGroup(slotNode));
+
+            // 軸ヘッダの ⋯ メニュー: 稀な操作を畳む。
+            const menu: MenuItem[] = [];
+            if (session.revisions.length > 0) {
+              menu.push({
+                label: '＋ 版から取り込み…',
+                title: '過去のコミットを別案セルとして取り込む（時間→空間の昇格）',
+                onClick: () => setPickRevAxis((a) => (a === axis.id ? null : axis.id)),
+              });
+            }
+            if (!isSlotless) {
+              menu.push({
+                label: '⟲ フォルダと同期',
+                title: 'slot フォルダの中身とセルを同期する',
+                onClick: () => {
+                  session.syncAxisCells(axis.id);
+                  onEdit();
+                },
+              });
+              menu.push({
+                label: '⇩ 現在を退避',
+                title: '現在の見た目を別案セルへ退避し、作業ビューをクリア（非破壊・引き戻し可）',
+                onClick: () => {
+                  session.parkSlot(axis.id);
+                  onEdit();
+                },
+              });
+            }
+            menu.push({
+              label: '✕ この軸を削除',
+              title: 'この軸（読み方）を削除。レイヤー自体は消えません。',
+              danger: true,
+              onClick: () => {
+                session.removeAxis(axis.id);
+                onEdit();
+              },
+            });
+
             return (
               <div className="var-axis" key={axis.id}>
                 <div className="var-axis-head">
-                  <span className="var-axis-name">{axis.name}</span>
-                  <span className={`muted ${slotBroken ? 'var-broken' : ''}`}>
-                    · {slotBroken ? '⚠ 差し替え点なし' : slotNode!.name}
+                  {editAxis === axis.id ? (
+                    <input
+                      ref={axisInputRef}
+                      className="var-axis-name-input"
+                      value={axisDraft}
+                      onChange={(e) => setAxisDraft(e.target.value)}
+                      onBlur={() => commitAxisName(axis.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitAxisName(axis.id);
+                        else if (e.key === 'Escape') setEditAxis(null);
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="var-axis-name"
+                      title="クリックで軸名を変更"
+                      onClick={() => {
+                        setAxisDraft(axis.name);
+                        setEditAxis(axis.id);
+                      }}
+                    >
+                      {axis.name}
+                    </span>
+                  )}
+                  <span className={`muted var-axis-slot ${slotBroken ? 'var-broken' : ''}`}>
+                    {isSlotless ? 'レイヤー選択' : slotBroken ? '⚠ 差し替え点なし' : slotNode!.name}
                   </span>
                   <span className="var-axis-spacer" />
-                  {session.revisions.length > 0 && (
+                  <button
+                    className={`var-icon ${onionAxes.has(axis.id) ? 'on' : ''}`}
+                    title="オニオンスキン: 全別案を重ねて表示（隠れた案は薄く）。プレビューのみ。"
+                    onClick={() => toggleOnion(axis.id)}
+                  >
+                    👁
+                  </button>
+                  <PopoverMenu items={menu} title="この軸の操作" className="var-icon" />
+                </div>
+
+                {/* ＋版から取り込み: ⋯ から開いたときだけ出すリビジョン選択。 */}
+                {pickRevAxis === axis.id && session.revisions.length > 0 && (
+                  <div className="var-pickrev">
                     <select
-                      className="var-addrev"
                       value=""
-                      title="過去のコミットを別案セルとして取り込む（時間→空間の昇格）"
+                      autoFocus
                       onChange={(e) => {
                         const rev = session.revisions.find((r) => r.id === e.target.value);
                         if (rev) {
                           session.addRevisionAsCell(axis.id, rev);
                           onEdit();
                         }
-                        e.currentTarget.value = '';
+                        setPickRevAxis(null);
                       }}
                     >
-                      <option value="">＋版から…</option>
+                      <option value="">版を選んでセル化…</option>
                       {session.revisions.map((r, i) => (
                         <option key={r.id} value={r.id}>
                           #{i} {r.label}
                         </option>
                       ))}
                     </select>
-                  )}
-                  <button
-                    className={onionAxes.has(axis.id) ? 'on' : ''}
-                    title="オニオンスキン: 全別案を重ねて表示（隠れた案は薄く）。プレビューのみ。"
-                    onClick={() => toggleOnion(axis.id)}
-                  >
-                    👁 重ね
-                  </button>
-                  <button
-                    title="現在の見た目を別案セルへ退避し、作業ビューをクリア（非破壊・引き戻し可）"
-                    onClick={() => {
-                      session.parkSlot(axis.id);
-                      onEdit();
-                    }}
-                  >
-                    ⇩ 退避
-                  </button>
-                  <button
-                    title="slot フォルダの中身とセルを同期する"
-                    onClick={() => {
-                      session.syncAxisCells(axis.id);
-                      onEdit();
-                    }}
-                  >
-                    ⟲ 同期
-                  </button>
-                  <button
-                    title="この軸（読み方）を削除。レイヤー自体は消えません。"
-                    onClick={() => {
-                      session.removeAxis(axis.id);
-                      onEdit();
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
+                    <button onClick={() => setPickRevAxis(null)}>取消</button>
+                  </div>
+                )}
 
                 {slotBroken && (
                   <p className="hint var-broken">
                     差し替え点フォルダが見つかりません（移動・削除された可能性）。この軸は機能しません。
-                    フォルダを作り直すか、✕ で軸を削除してください。下のセルも ✕ で外せます。
+                    フォルダを作り直すか、⋯ →「この軸を削除」で外してください。
                   </p>
                 )}
 
                 {axis.cells.length === 0 ? (
                   !slotBroken && (
                     <p className="hint">
-                      このフォルダにはまだ別案レイヤーがありません。フォルダ内にレイヤーを足して「同期」を
-                      押してください。
+                      {isSlotless
+                        ? 'セルがありません。⋯ →「この軸を削除」で外せます。'
+                        : 'このフォルダにはまだ別案レイヤーがありません。フォルダ内にレイヤーを足して ⋯ →「同期」を押してください。'}
                     </p>
                   )
                 ) : (
-                  <div className="var-cells">
+                  <div className="var-shelf">
                     {axis.cells.map((cell) => {
                       const node = getNode(session.state, cell.id);
                       const dead = !node; // レイヤーが見つからない（削除/構造破壊）
                       const on = !!node?.visible;
+                      const srcLive =
+                        cell.sourceRevId && session.revisions.some((r) => r.id === cell.sourceRevId);
                       return (
-                        <div
+                        <ThumbCard
                           key={cell.id}
-                          className={`var-cell ${on ? 'on' : ''} ${dead ? 'dead' : ''}`}
-                          title={
-                            dead
-                              ? `${cell.name}（レイヤーが見つかりません）`
-                              : cell.sourceRevId
-                                ? `${cell.name}（過去版由来）`
-                                : cell.name
+                          thumb={thumbs.get(`${axis.id}:${cell.id}`)}
+                          title={cell.name}
+                          state={on ? 'current' : 'normal'}
+                          dead={dead}
+                          size={CARD}
+                          badge={dead ? '⚠' : on ? '☑' : '☐'}
+                          hint={
+                            cell.sourceRevId ? (
+                              <span className="var-src-mark" title="過去版由来">
+                                ◷
+                              </span>
+                            ) : undefined
                           }
-                          onClick={() => {
-                            if (dead) return;
+                          onActivate={() => {
                             session.toggleCell(axis.id, cell.id);
                             onEdit();
                           }}
-                        >
-                          <img
-                            className="var-cell-thumb"
-                            src={thumbs.get(`${axis.id}:${cell.id}`)}
-                            alt={cell.name}
-                          />
-                          <div className="var-cell-name">
-                            <span className="var-cell-mark">{dead ? '⚠' : on ? '☑' : '☐'}</span>
-                            <span className="var-cell-label">{cell.name}</span>
-                            {cell.sourceRevId &&
-                              (session.revisions.some((r) => r.id === cell.sourceRevId) ? (
+                          onRename={
+                            dead
+                              ? undefined
+                              : (n) => {
+                                  session.renameCell(axis.id, cell.id, n);
+                                  onEdit();
+                                }
+                          }
+                          hoverActions={
+                            <>
+                              {!dead && (
                                 <button
-                                  className="var-cell-src"
-                                  title="出自の版を Revisions（時間の読み）で選択"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onShowRevision(cell.sourceRevId!);
+                                  className="tc-act"
+                                  title="このセルを作業対象として編集（pull）"
+                                  onClick={() => {
+                                    const leaf = session.pullCellToWorking(axis.id, cell.id);
+                                    onEdit();
+                                    if (leaf) onActivateLayer(leaf);
                                   }}
+                                >
+                                  ✎
+                                </button>
+                              )}
+                              {srcLive && (
+                                <button
+                                  className="tc-act"
+                                  title="出自の版を Revisions（時間の読み）で選択"
+                                  onClick={() => onShowRevision(cell.sourceRevId!)}
                                 >
                                   ⤴
                                 </button>
-                              ) : (
-                                <span className="var-cell-src muted" title="出自の版は削除済み">
-                                  ⤴
-                                </span>
-                              ))}
-                            {!dead && (
+                              )}
                               <button
-                                className="var-cell-edit"
-                                title="このセルを作業対象として編集（pull）"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const leaf = session.pullCellToWorking(axis.id, cell.id);
+                                className="tc-act danger"
+                                title="このセルを軸から外す（レイヤーは消えません）"
+                                onClick={() => {
+                                  session.removeCell(axis.id, cell.id);
                                   onEdit();
-                                  if (leaf) onActivateLayer(leaf);
                                 }}
                               >
-                                ✎
+                                ✕
                               </button>
-                            )}
-                            <button
-                              className="var-cell-del"
-                              title="このセルを軸から外す（レイヤーは消えません）"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                session.removeCell(axis.id, cell.id);
-                                onEdit();
-                              }}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
+                            </>
+                          }
+                        />
                       );
                     })}
                   </div>

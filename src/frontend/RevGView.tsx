@@ -1,5 +1,4 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { Dag, ImageBuffer, Operation } from '../types';
 import type { EditorSession } from '../session';
 import type { CommittedRevision } from '../backend/revision';
@@ -10,18 +9,18 @@ import { downsampleBuffer } from '../engine/imageBuffer';
 import { layoutNodes } from '../backend/filters/layout';
 import { buildRevG, type RevGCluster } from '../backend/filters/importance';
 import { ROOT_ID } from '../backend/dag';
-import { KLASS_COLOR } from './klass';
 import { bufferToDataURL } from './thumbnail';
+import { ThumbCard, type ThumbCardState } from './ThumbCard';
+import { PopoverMenu, type MenuItem } from './Popover';
 
-const THUMB_W = 64;
-const THUMB_H = 48;
-const NODE_W = THUMB_W + 10;
-const NODE_H = THUMB_H + 22;
-const PAD = 16;
+const THUMB_W = 104; // サムネ生成サイズ（大きいカードでも粗くならないよう拡大）
+const THUMB_H = 78;
+const NODE_THUMB = 88; // カードのサムネ表示幅
+const NODE_W = 104; // レイアウト上のノード占有幅（カード幅＋余白）
+const NODE_H = 108;
+const PAD = 18;
 const IMP_W = 64; // importance 計算用の縮小サイズ
 const IMP_H = 48;
-const MENU_W = 215; // 右クリックメニューの想定サイズ（画面端クランプ用）
-const MENU_H = 196;
 
 function labelOf(op: Operation, memberCount: number): string {
   const p = op.params as Record<string, unknown>;
@@ -35,6 +34,21 @@ function labelOf(op: Operation, memberCount: number): string {
   return memberCount > 1 ? `${base} (+${memberCount - 1})` : base;
 }
 
+/** ルート経路の折れ線を角丸の滑らかなパスにする（git グラフ風の曲線エッジ）。 */
+function smoothPath(points: { x: number; y: number }[]): string {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x},${points[0].y}`;
+  let d = `M ${points[0].x},${points[0].y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const xc = (points[i].x + points[i + 1].x) / 2;
+    const yc = (points[i].y + points[i + 1].y) / 2;
+    d += ` Q ${points[i].x},${points[i].y} ${xc},${yc}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last.x},${last.y}`;
+  return d;
+}
+
 export const RevGView = memo(function RevGView({
   session,
   dag,
@@ -46,6 +60,7 @@ export const RevGView = memo(function RevGView({
   onCheckoutRevision,
   onCompareRevisions,
   onMergeRevisions,
+  onCompareWithCurrent,
   onDeleteRevision,
 }: {
   session: EditorSession;
@@ -55,14 +70,15 @@ export const RevGView = memo(function RevGView({
   revisions: CommittedRevision[];
   version: number;
   // 展開中か。false の間も常時マウントしてサムネイルキャッシュを温存するが、
-  // 重いグラフ集約(buildRevG)・レイアウト・SVG 描画は active のときだけ行う。
+  // 重いグラフ集約(buildRevG)・レイアウト・描画は active のときだけ行う。
   active: boolean;
   selectedNodeId: string | null;
   onSelectNode: (id: string | null) => void;
-  // コミットノードの右クリックメニューから発行する操作（原論文 Figure 2 の右クリックメニュー相当）。
+  // コミットノードのカードメニュー（Quickpose の右クリックメニュー相当）から発行する操作。
   onCheckoutRevision: (rev: CommittedRevision) => void;
   onCompareRevisions: (a: CommittedRevision, b: CommittedRevision) => void;
   onMergeRevisions: (trunk: CommittedRevision, branch: CommittedRevision) => void;
+  onCompareWithCurrent: (rev: CommittedRevision) => void;
   onDeleteRevision: (rev: CommittedRevision) => void;
 }) {
   const log = session.getLog();
@@ -152,7 +168,7 @@ export const RevGView = memo(function RevGView({
     return s;
   }, [revisions]);
 
-  // ノード id → そこに head を持つリビジョンのラベル群（コミットタグ表示用）。
+  // ノード id → そこに head を持つリビジョンのラベル群（コミット名表示用）。
   // head は強制アンカーなので、必ず自分自身が代表のクラスタになる（クラスタ id == head id）。
   const revTagByNode = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -170,38 +186,21 @@ export const RevGView = memo(function RevGView({
     return m;
   }, [revisions]);
 
-  // 右クリックメニュー（コミットノード上）と、diff/merge の「2つ目を選択」待ち状態。
-  const [menu, setMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  // diff/merge の「2つ目を選択」待ち状態（カードクリックで相手を確定）。
   const [pending, setPending] = useState<{ action: 'compare' | 'merge'; from: CommittedRevision } | null>(
     null,
   );
-  // メニューは portal で body 直下に出すため、外側クリック判定は実DOMの contains で行う。
-  const menuElRef = useRef<HTMLDivElement>(null);
 
-  // Esc で取消、メニュー外クリックでメニューを閉じる。
+  // Esc で2つ目選択を取消。
   useEffect(() => {
-    if (!menu && !pending) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setMenu(null);
-        setPending(null);
-      }
-    };
-    const onDocClick = (e: MouseEvent) => {
-      if (menuElRef.current?.contains(e.target as Node)) return; // メニュー内クリックは閉じない
-      setMenu(null);
-    };
+    if (!pending) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPending(null);
     document.addEventListener('keydown', onKey);
-    document.addEventListener('click', onDocClick);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('click', onDocClick);
-    };
-  }, [menu, pending]);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [pending]);
 
   // ノードのクリック: 2つ目待ちならその相手として確定、そうでなければ選択トグル。
   const onNodeClick = (nodeId: string) => {
-    setMenu(null);
     if (pending) {
       const rev = revByHead.get(nodeId);
       if (rev && rev.id !== pending.from.id) {
@@ -215,7 +214,23 @@ export const RevGView = memo(function RevGView({
   };
 
   const indexOfRev = (rev: CommittedRevision) => revisions.findIndex((r) => r.id === rev.id);
-  const menuRev = menu ? revByHead.get(menu.nodeId) : null;
+
+  // コミットカードの ⋯ メニュー（Quickpose の右クリックメニュー相当）。
+  const commitMenu = (rev: CommittedRevision): MenuItem[] => [
+    { label: 'Checkout（この版へ分岐）', onClick: () => onCheckoutRevision(rev) },
+    {
+      label: 'Compare with…（2つ目を選択）',
+      disabled: revisions.length < 2,
+      onClick: () => setPending({ action: 'compare', from: rev }),
+    },
+    {
+      label: 'Merge with…（これを trunk に）',
+      disabled: revisions.length < 2,
+      onClick: () => setPending({ action: 'merge', from: rev }),
+    },
+    { label: '現在の作業状態と比較', onClick: () => onCompareWithCurrent(rev) },
+    { label: 'Delete（このコミットを削除）', danger: true, onClick: () => onDeleteRevision(rev) },
+  ];
 
   // 集約・レイアウトは展開中のみ計算する（折りたたみ中はサムネイル温存だけでよい）。
   const revg = useMemo(
@@ -226,7 +241,7 @@ export const RevGView = memo(function RevGView({
   const layout = useMemo(
     () =>
       revg
-        ? layoutNodes(revg.clusters.values(), { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 58 })
+        ? layoutNodes(revg.clusters.values(), { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 50 })
         : null,
     [revg],
   );
@@ -234,9 +249,11 @@ export const RevGView = memo(function RevGView({
   // 折りたたみ中は何も描画しない（マウントは維持され、上のサムネイル useMemo は走り続ける）。
   if (!active || !revg || !layout) return null;
 
-  const svgW = Math.max(layout.width + PAD * 2, 220);
-  const svgH = Math.max(layout.height + PAD * 2, 120);
+  const stageW = Math.max(layout.width + PAD * 2, 220);
+  const stageH = Math.max(layout.height + PAD * 2, 120);
   const totalNodes = dag.nodes.size;
+  // 「現在いる場所」＝作業ログの先頭（末尾 op）。空なら ROOT。
+  const currentTipId = log.length ? log[log.length - 1].id : ROOT_ID;
 
   return (
     <div className="revg">
@@ -267,167 +284,83 @@ export const RevGView = memo(function RevGView({
       )}
 
       <div className="revg-scroll">
-        <svg className="revg-svg" width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
-          <g transform={`translate(${PAD},${PAD})`}>
-            {layout.edges.map((e, i) => (
-              <polyline
-                key={`${e.from}->${e.to}-${i}`}
-                className="revg-edge"
-                points={e.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                fill="none"
-              />
-            ))}
-
-            {[...revg.clusters.values()].map((cluster: RevGCluster) => {
-              const nl = layout.nodes.get(cluster.id);
-              if (!nl) return null;
-              const x = nl.x - nl.width / 2;
-              const y = nl.y - nl.height / 2;
-              const color = KLASS_COLOR[cluster.op.klass];
-              const selected = cluster.id === selectedNodeId;
-              const thumb = thumbs.get(cluster.id);
-              const aggregated = cluster.memberIds.length > 1;
-              const revTags = revTagByNode.get(cluster.id);
-              const tagText = revTags?.join(' / ') ?? '';
-              const tagW = Math.max(30, tagText.length * 5.6 + 12);
-              return (
-                <g
-                  key={cluster.id}
-                  transform={`translate(${x},${y})`}
-                  className={`revg-node ${selected ? 'selected' : ''} ${revTags ? 'commit' : ''} ${
-                    pending && revTags ? 'pickable' : ''
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onNodeClick(cluster.id);
-                  }}
-                  onContextMenu={(e) => {
-                    if (revByHead.has(cluster.id)) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setPending(null);
-                      setMenu({ x: e.clientX, y: e.clientY, nodeId: cluster.id });
-                    }
-                  }}
-                >
-                  {aggregated && (
-                    <rect
-                      className="revg-node-stack"
-                      width={nl.width}
-                      height={nl.height}
-                      rx={6}
-                      transform="translate(4,4)"
-                      style={{ stroke: color }}
-                    />
-                  )}
-                  {/* コミット点（リビジョン head）は金色のリングで強調する。 */}
-                  {revTags && (
-                    <rect
-                      x={-3}
-                      y={-3}
-                      width={nl.width + 6}
-                      height={nl.height + 6}
-                      rx={8}
-                      fill="none"
-                      stroke="#f2c94c"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 2"
-                    />
-                  )}
-                  <rect
-                    className="revg-node-bg"
-                    width={nl.width}
-                    height={nl.height}
-                    rx={6}
-                    style={{ stroke: color, strokeWidth: selected ? 3.5 : aggregated ? 2.5 : 2 }}
-                  />
-                  {thumb && (
-                    <image
-                      href={thumb}
-                      x={(nl.width - THUMB_W) / 2}
-                      y={4}
-                      width={THUMB_W}
-                      height={THUMB_H}
-                      preserveAspectRatio="xMidYMid meet"
-                    />
-                  )}
-                  <text x={nl.width / 2} y={nl.height - 6} textAnchor="middle" className="revg-label">
-                    {labelOf(cluster.op, cluster.memberIds.length)}
-                  </text>
-                  {/* コミットタグ: このノードに head を持つリビジョンのラベル。 */}
-                  {revTags && (
-                    <g transform={`translate(${nl.width / 2}, -11)`}>
-                      <rect x={-tagW / 2} y={-8} width={tagW} height={15} rx={7} fill="#f2c94c" />
-                      <text x={0} y={3} textAnchor="middle" className="revg-commit-tag">
-                        {tagText}
-                      </text>
-                    </g>
-                  )}
-                </g>
-              );
-            })}
-          </g>
-        </svg>
-      </div>
-
-      {menu &&
-        menuRev &&
-        // portal で body 直下に描画する。.float-window は backdrop-filter を持つため、その内側だと
-        // position:fixed でも包含ブロックがウインドウになり overflow:hidden で切り取られてしまう。
-        // さらに画面端で切れないようビューポート内にクランプする。
-        createPortal(
-          <div
-            ref={menuElRef}
-            className="revg-menu"
-            style={{
-              position: 'fixed',
-              left: Math.max(8, Math.min(menu.x, window.innerWidth - MENU_W - 8)),
-              top: Math.max(8, Math.min(menu.y, window.innerHeight - MENU_H - 8)),
-            }}
-            onClick={(e) => e.stopPropagation()}
+        <div className="revg-stage" style={{ width: stageW, height: stageH }}>
+          {/* 背面: 曲線エッジ（クリックはカードに通すため pointer-events none） */}
+          <svg
+            className="revg-svg"
+            width={stageW}
+            height={stageH}
+            viewBox={`0 0 ${stageW} ${stageH}`}
           >
-            <div className="revg-menu-head">
-              #{indexOfRev(menuRev)} {menuRev.label}
-            </div>
-            <button
-              onClick={() => {
-                onCheckoutRevision(menuRev);
-                setMenu(null);
-              }}
-            >
-              Checkout（このリビジョンへ分岐）
-            </button>
-            <button
-              disabled={revisions.length < 2}
-              onClick={() => {
-                setPending({ action: 'compare', from: menuRev });
-                setMenu(null);
-              }}
-            >
-              Compare with…（2つ目を選択）
-            </button>
-            <button
-              disabled={revisions.length < 2}
-              onClick={() => {
-                setPending({ action: 'merge', from: menuRev });
-                setMenu(null);
-              }}
-            >
-              Merge with…（これを trunk に）
-            </button>
-            <div className="revg-menu-sep" />
-            <button
-              className="revg-menu-danger"
-              onClick={() => {
-                onDeleteRevision(menuRev);
-                setMenu(null);
-              }}
-            >
-              Delete（このコミットを削除）
-            </button>
-          </div>,
-          document.body,
-        )}
+            <g transform={`translate(${PAD},${PAD})`}>
+              {layout.edges.map((e, i) => (
+                <path
+                  key={`${e.from}->${e.to}-${i}`}
+                  className="revg-edge"
+                  d={smoothPath(e.points)}
+                  fill="none"
+                />
+              ))}
+            </g>
+          </svg>
+
+          {/* 前面: サムネカード（ThumbCard） */}
+          {[...revg.clusters.values()].map((cluster: RevGCluster) => {
+            const nl = layout.nodes.get(cluster.id);
+            if (!nl) return null;
+            const rev = revByHead.get(cluster.id);
+            const isCommit = !!rev;
+            const isTip = cluster.id === currentTipId;
+            const selected = cluster.id === selectedNodeId;
+            const aggregated = cluster.memberIds.length > 1;
+            const title = isCommit
+              ? (revTagByNode.get(cluster.id)?.join(' / ') ?? rev!.label)
+              : labelOf(cluster.op, cluster.memberIds.length);
+            const state: ThumbCardState = selected
+              ? 'selected'
+              : isTip
+                ? 'current'
+                : isCommit
+                  ? 'commit'
+                  : 'normal';
+            const badge = isCommit ? (
+              <span className="revg-star">★</span>
+            ) : isTip ? (
+              <span className="revg-now">●</span>
+            ) : undefined;
+            return (
+              <div
+                key={cluster.id}
+                id={`nrc-node-${cluster.id}`}
+                className="revg-card-pos"
+                style={{ left: nl.x + PAD, top: nl.y + PAD }}
+              >
+                <ThumbCard
+                  thumb={thumbs.get(cluster.id)}
+                  title={title}
+                  state={state}
+                  size={NODE_THUMB}
+                  className={`revg-card ${aggregated ? 'stacked' : ''} ${
+                    pending && isCommit ? 'pickable' : ''
+                  }`}
+                  badge={badge}
+                  onActivate={() => onNodeClick(cluster.id)}
+                  onDoubleClick={isCommit ? () => onCheckoutRevision(rev!) : undefined}
+                  cornerMenu={
+                    isCommit ? (
+                      <PopoverMenu
+                        className="revg-card-menu"
+                        title="このコミットの操作"
+                        items={commitMenu(rev!)}
+                      />
+                    ) : undefined
+                  }
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 });

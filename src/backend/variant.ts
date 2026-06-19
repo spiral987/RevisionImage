@@ -32,8 +32,10 @@ export function cellPreviewState(
   cellId: string,
 ): EditorState {
   let st = state;
-  const slot = getNode(st, axis.slotId);
-  if (slot && !slot.visible) st = updateNode(st, axis.slotId, (n) => ({ ...n, visible: true }));
+  if (axis.slotId) {
+    const slot = getNode(st, axis.slotId);
+    if (slot && !slot.visible) st = updateNode(st, axis.slotId!, (n) => ({ ...n, visible: true }));
+  }
   for (const cell of axis.cells) {
     const want = cell.id === cellId;
     const node = getNode(st, cell.id);
@@ -54,8 +56,10 @@ export function onionSkinState(
   ghostOpacity = 0.35,
 ): EditorState {
   let st = state;
-  const slot = getNode(st, axis.slotId);
-  if (slot && !slot.visible) st = updateNode(st, axis.slotId, (n) => ({ ...n, visible: true }));
+  if (axis.slotId) {
+    const slot = getNode(st, axis.slotId);
+    if (slot && !slot.visible) st = updateNode(st, axis.slotId!, (n) => ({ ...n, visible: true }));
+  }
   for (const cell of axis.cells) {
     const node = getNode(st, cell.id);
     if (!node) continue;

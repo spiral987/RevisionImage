@@ -85,13 +85,16 @@ export interface VariantCell {
 
 /**
  * 空間軸 ＝ 別案（セル）を束ねる単位（「目」「口」「トップス」…）。
- * slot（差し替え点）＝ base のレイヤーツリー上の 1 ノード id を指す。粒度（目リーフ／顔
- * フォルダ／キャラ全体）は作家が slot を選ぶことで明示宣言する（CONCEPT §4.2-2）。
+ * 2 通りの作り方がある:
+ *  - フォルダ式: slotId にフォルダ(差し替え点)を指定し、その子をセルにする（同期・退避が使える）。
+ *  - 選択式(slotless): slotId を持たず、任意の場所のレイヤーを直接セルにする（フォルダ不要）。
+ * どちらもセルは独立にトグル（表示/非表示）する読み。粒度は作家が選んだ単位で宣言される。
  */
 export interface VariantAxis {
   id: string;
   name: string;
-  slotId: string; // 差し替え点 = base ツリー上の Layer/Group id
+  /** フォルダ式のみ: 差し替え点フォルダの id。選択式(slotless)では undefined。 */
+  slotId?: string;
   cells: VariantCell[]; // 順序付きセル一覧。各セルは独立にトグル（表示/非表示）する。
 }
 

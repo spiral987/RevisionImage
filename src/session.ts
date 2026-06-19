@@ -228,6 +228,25 @@ export class EditorSession {
     return axis;
   }
 
+  /**
+   * 任意の場所のレイヤー群から「選択式(slotless)」の軸を作る（フォルダ不要）。CONCEPT §3.1。
+   * 差し替え点フォルダを持たず、与えた layer をそのまま別案セルにする。レイヤーツリーは変更せず、
+   * 「これらは対等な別案だ」という読み（可視のトグル）を被せるだけ。存在するノードのみ採用する。
+   */
+  addAxisFromLayers(name: string, layerIds: readonly string[]): VariantAxis {
+    const axis: VariantAxis = {
+      id: genId('axis'),
+      name: name && name.trim() ? name.trim() : `軸 ${this.axes.length + 1}`,
+      cells: [],
+    };
+    for (const id of layerIds) {
+      const node = getNode(this.state, id);
+      if (node && !axis.cells.some((c) => c.id === id)) axis.cells.push({ id, name: node.name });
+    }
+    this.axes.push(axis);
+    return axis;
+  }
+
   /** 軸を削除する（レイヤー実体・作業状態には触れない。読み方を消すだけ）。 */
   removeAxis(axisId: string): boolean {
     const before = this.axes.length;
@@ -237,6 +256,26 @@ export class EditorSession {
 
   getAxis(axisId: string): VariantAxis | undefined {
     return this.axes.find((a) => a.id === axisId);
+  }
+
+  /** 軸名を変更する（サイドカーの注釈のみ。レイヤー実体・replay には無関係）。空文字は無視。 */
+  renameAxis(axisId: string, name: string): boolean {
+    const axis = this.getAxis(axisId);
+    const next = name.trim();
+    if (!axis || !next || axis.name === next) return false;
+    axis.name = next;
+    return true;
+  }
+
+  /** セル名を変更する（サイドカーの注釈のみ）。空文字は無視。 */
+  renameCell(axisId: string, cellId: string, name: string): boolean {
+    const axis = this.getAxis(axisId);
+    const next = name.trim();
+    if (!axis || !next) return false;
+    const cell = axis.cells.find((c) => c.id === cellId);
+    if (!cell || cell.name === next) return false;
+    cell.name = next;
+    return true;
   }
 
   /** 軸にセルを登録する。cell.id（= slot 配下の兄弟 nodeId）が既出なら冪等に無視。 */
@@ -254,7 +293,7 @@ export class EditorSession {
    */
   syncAxisCells(axisId: string): boolean {
     const axis = this.getAxis(axisId);
-    if (!axis) return false;
+    if (!axis || !axis.slotId) return false; // 選択式(slotless)は同期対象のフォルダを持たない
     const children = slotChildren(this.state, axis.slotId);
     const childIds = new Set(children.map((c) => c.id));
     let changed = false;
@@ -317,16 +356,20 @@ export class EditorSession {
   addRevisionAsCell(axisId: string, rev: CommittedRevision): boolean {
     const axis = this.getAxis(axisId);
     if (!axis) return false;
-    const slot = getNode(this.state, axis.slotId);
-    if (!slot || !isGroup(slot)) return false; // slot はフォルダのみ
+    if (axis.slotId) {
+      const slot = getNode(this.state, axis.slotId);
+      if (!slot || !isGroup(slot)) return false; // フォルダ式: slot はフォルダのみ
+    }
     const piece = revisionPiece(rev, this.width, this.height);
     if (!piece) return false; // 何も描かれていない版
     const layerId = genId('layer');
-    this.applyBatch([
+    const ops: Operation[] = [
       createAddImageLayerOp(layerId, rev.label, piece.buffer, piece.x, piece.y, this.width, this.height),
-      createMoveNodeOp(layerId, axis.slotId, 1e9), // slot フォルダの末尾へ
-      createSetLayerVisibilityOp(layerId, false), // 初期は非表示
-    ]);
+    ];
+    // フォルダ式は slot フォルダ末尾へ。選択式(slotless)は最上位のまま（addImageLayer の既定位置）。
+    if (axis.slotId) ops.push(createMoveNodeOp(layerId, axis.slotId, 1e9));
+    ops.push(createSetLayerVisibilityOp(layerId, false)); // 初期は非表示
+    this.applyBatch(ops);
     this.addCell(axisId, { id: layerId, name: rev.label, sourceRevId: rev.id });
     return true;
   }
@@ -339,10 +382,11 @@ export class EditorSession {
    */
   parkSlot(axisId: string): boolean {
     const axis = this.getAxis(axisId);
-    if (!axis) return false;
-    const slot = getNode(this.state, axis.slotId);
+    if (!axis || !axis.slotId) return false; // フォルダ式のみ（選択式は退避対象の領域を持たない）
+    const slotId = axis.slotId;
+    const slot = getNode(this.state, slotId);
     if (!slot || !isGroup(slot)) return false;
-    const piece = slotPiece(this.state, axis.slotId);
+    const piece = slotPiece(this.state, slotId);
     if (!piece) return false; // 見えているものが無い
     const layerId = genId('layer');
     const name = `退避 ${axis.cells.length + 1}`;
@@ -355,7 +399,7 @@ export class EditorSession {
     ops.push(
       createAddImageLayerOp(layerId, name, piece.buffer, piece.x, piece.y, this.width, this.height),
     );
-    ops.push(createMoveNodeOp(layerId, axis.slotId, 1e9));
+    ops.push(createMoveNodeOp(layerId, slotId, 1e9));
     ops.push(createSetLayerVisibilityOp(layerId, false));
     this.applyBatch(ops);
     this.addCell(axisId, { id: layerId, name });

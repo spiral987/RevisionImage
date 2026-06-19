@@ -34,14 +34,13 @@ export function App() {
   const [wInput, setWInput] = useState(String(session.width));
   const [hInput, setHInput] = useState(String(session.height));
   const [revisions, setRevisions] = useState<CommittedRevision[]>([]);
-  const [selectedRevIds, setSelectedRevIds] = useState<string[]>([]);
   const [diffPair, setDiffPair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
   const [mergePair, setMergePair] = useState<[CommittedRevision, CommittedRevision] | null>(null);
   const [commitLabel, setCommitLabel] = useState('');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  // REVG の開閉は App 側で持つ。RevGView は常時マウントしたままサムネイルキャッシュを温存し、
+  // REVG（サムネの木）が Revisions の主表示。常時マウントしてサムネイルキャッシュを温存し、
   // active で描画/集約だけ切り替える（展開のたびに全ノード再生成して固まるのを防ぐ）。
-  const [revgOpen, setRevgOpen] = useState(false);
+  const [revgOpen, setRevgOpen] = useState(true);
   const [saved, setSaved] = useState(false);
   // Variants の pull（セル→作業）で CanvasEditor のアクティブレイヤーを切り替える信号。
   const [activeReq, setActiveReq] = useState<{ id: string; n: number } | null>(null);
@@ -53,7 +52,6 @@ export function App() {
     setVersion((v) => v + 1);
     setRevisions([...session.revisions]);
     if (session.revisions.length === 0) {
-      setSelectedRevIds([]);
       setDiffPair(null);
       setMergePair(null);
     }
@@ -68,12 +66,20 @@ export function App() {
       axes: session.axes,
     });
 
-  // 空間→時間の相互ナビ: Variants のセル(出自付き)から元コミットを Revisions で選択・スクロール表示。
+  // 空間→時間の相互ナビ: Variants のセル(出自付き)から元コミットを Revisions の木で選択・スクロール表示。
+  // コミットの head ノード（= グラフ上のカード）を選択し、見える位置へスクロールする。
   const showRevision = (id: string) => {
-    setSelectedRevIds([id]);
-    requestAnimationFrame(() =>
-      document.getElementById(`nrc-rev-${id}`)?.scrollIntoView({ block: 'nearest' }),
-    );
+    const rev = session.revisions.find((r) => r.id === id);
+    const head = rev?.headIds[0];
+    setRevgOpen(true);
+    if (head) {
+      setSelectedNodeId(head);
+      requestAnimationFrame(() =>
+        document
+          .getElementById(`nrc-node-${head}`)
+          ?.scrollIntoView({ block: 'nearest', inline: 'nearest' }),
+      );
+    }
   };
 
   // 時間の読み: 過去の版と「現在の作業状態」を見比べる（CONCEPT §2-4「過去と現在を見比べたい」）。
@@ -162,7 +168,6 @@ export function App() {
         session.loadProject(parsed);
         syncDims();
         setRevisions([...session.revisions]);
-        setSelectedRevIds([]);
         setSelectedNodeId(null);
         setDiffPair(null);
         setMergePair(null);
@@ -181,7 +186,6 @@ export function App() {
         session.loadProject({ width, height, log: ops, revisions: [] });
         syncDims();
         setRevisions([]);
-        setSelectedRevIds([]);
         setSelectedNodeId(null);
         setDiffPair(null);
         setMergePair(null);
@@ -267,23 +271,9 @@ export function App() {
       return;
     session.deleteRevision(rev.id);
     setRevisions([...session.revisions]);
-    setSelectedRevIds((prev) => prev.filter((x) => x !== rev.id));
     setDiffPair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
     setMergePair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
     setSelectedNodeId(null);
-  };
-
-  const toggleRev = (id: string) => {
-    setSelectedRevIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 2 ? [prev[1], id] : [...prev, id],
-    );
-  };
-
-  const pickPair = (): [CommittedRevision, CommittedRevision] | null => {
-    if (selectedRevIds.length !== 2) return null;
-    const a = revisions.find((r) => r.id === selectedRevIds[0]);
-    const b = revisions.find((r) => r.id === selectedRevIds[1]);
-    return a && b ? [a, b] : null;
   };
 
   const onMerged = (mergedOps: Operation[], label: string) => {
@@ -292,7 +282,6 @@ export function App() {
     session.commitRevision(label);
     setRevisions([...session.revisions]);
     setMergePair(null);
-    setSelectedRevIds([]);
     setSelectedNodeId(null);
     setVersion((v) => v + 1);
   };
@@ -395,65 +384,12 @@ export function App() {
             <button onClick={commit} disabled={session.getLog().length === 0}>
               Commit
             </button>
-            <button onClick={() => setDiffPair(pickPair())} disabled={selectedRevIds.length !== 2}>
-              Compare ({selectedRevIds.length}/2)
-            </button>
-            <button onClick={() => setMergePair(pickPair())} disabled={selectedRevIds.length !== 2}>
-              Merge ({selectedRevIds.length}/2)
-            </button>
           </div>
-          {revisions.length === 0 ? (
-            <p className="hint">
-              「Commit」で現在の状態をリビジョン確定。過去リビジョンを Checkout すると分岐して編集でき、
-              2つ選んで Compare / Merge できます。
-            </p>
-          ) : (
-            <ul className="rev-list">
-              {revisions.map((r, i) => (
-                <li
-                  key={r.id}
-                  id={`nrc-rev-${r.id}`}
-                  className={selectedRevIds.includes(r.id) ? 'selected' : ''}
-                  onClick={() => toggleRev(r.id)}
-                >
-                  <span className="rev-check">{selectedRevIds.includes(r.id) ? '☑' : '☐'}</span>
-                  <span className="rev-label">
-                    #{i} {r.label}
-                  </span>
-                  <span className="muted">{r.ops.length} ops</span>
-                  <button
-                    className="rev-compare-cur"
-                    title="この版と現在の作業状態を見比べる"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      compareWithCurrent(r);
-                    }}
-                  >
-                    現在と比較
-                  </button>
-                  <button
-                    className="rev-checkout"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      checkout(r);
-                    }}
-                  >
-                    Checkout
-                  </button>
-                  <button
-                    className="rev-delete"
-                    title="このコミットを削除（作業中の状態には影響しません）"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteRev(r);
-                    }}
-                  >
-                    🗑
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          <p className="hint">
+            {revisions.length === 0
+              ? '「Commit」で現在の状態を版として確定。確定すると下の履歴ツリーにサムネで並びます。'
+              : '下の履歴ツリーが版の一覧です。カードをダブルクリックで Checkout、ホバーの ⋯ から比較 / マージ / 削除。'}
+          </p>
         </Section>
 
         {/* REVG は Section で unmount すると展開のたびに全ノードのサムネイルを replay 込みで
@@ -466,14 +402,14 @@ export function App() {
               title={revgOpen ? '折りたたむ' : '展開'}
             >
               {revgOpen ? '−' : '+'}
-              <span className="fsec-title">REVG</span>
+              <span className="fsec-title">履歴ツリー</span>
             </button>
           </div>
           <div className="fsec-body" style={{ display: revgOpen ? undefined : 'none' }}>
             <p className="hint">
-              全リビジョン + 作業中の状態を1つのグラフに統合表示。金色の破線枠＋ラベルが各コミット点
-              （リビジョンの head）。分岐したコミットは枝、マージは合流として現れます。ノードクリックで
-              対応領域をハイライト。枠色は操作クラス（brush=赤 / color=青 / rigid=緑 / deform=黄 / edit=紫）。
+              全リビジョン + 作業中の状態を1つの木に統合表示。サムネ＝各状態、★＝コミット点（版の head）、
+              青枠＝今いる場所。分岐は枝、マージは合流として現れます。カードをクリックで対応領域を
+              ハイライト、ダブルクリックで Checkout、ホバーの ⋯ から比較 / マージ / 削除。
             </p>
           </div>
           <RevGView
@@ -485,14 +421,9 @@ export function App() {
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
             onCheckoutRevision={(rev) => checkout(rev)}
-            onCompareRevisions={(a, b) => {
-              setSelectedRevIds([a.id, b.id]);
-              setDiffPair([a, b]);
-            }}
-            onMergeRevisions={(a, b) => {
-              setSelectedRevIds([a.id, b.id]);
-              setMergePair([a, b]);
-            }}
+            onCompareRevisions={(a, b) => setDiffPair([a, b])}
+            onMergeRevisions={(a, b) => setMergePair([a, b])}
+            onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
             onDeleteRevision={(rev) => deleteRev(rev)}
           />
         </section>

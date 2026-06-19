@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MutableRefObject, PointerEvent as ReactPointerEvent } from 'react';
+import type {
+  MutableRefObject,
+  PointerEvent as ReactPointerEvent,
+  MouseEvent as ReactMouseEvent,
+} from 'react';
 import type {
   BBox,
   Dag,
@@ -220,6 +224,8 @@ export function CanvasEditor({
   const [opacity, setOpacity] = useState(1);
   const [tolerance, setTolerance] = useState(24);
   const [activeLayerId, setActiveLayerId] = useState(session.state.activeLayerId);
+  // 複数選択（Ctrl/⌘+クリックで追加）。選択レイヤー群を一発で Variants 軸にするのに使う。
+  const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
   const [histIndex, setHistIndex] = useState<number | null>(null);
   const [verify, setVerify] = useState<{ ok: boolean; msg: string } | null>(null);
   const [hovering, setHovering] = useState(false);
@@ -1537,6 +1543,32 @@ export function CanvasEditor({
     repaint();
   };
 
+  // レイヤー名クリック: グループは開閉、リーフは選択。Ctrl/⌘ で複数選択にトグル追加。
+  const onLayerClick = (n: LayerNode, e: ReactMouseEvent) => {
+    if (isGroup(n)) {
+      toggleCollapse(n);
+      return;
+    }
+    setActiveLayerId(n.id);
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedLayerIds((prev) => {
+        const s = new Set(prev);
+        s.has(n.id) ? s.delete(n.id) : s.add(n.id);
+        return s;
+      });
+    } else {
+      setSelectedLayerIds(new Set([n.id]));
+    }
+  };
+
+  // 選択中のレイヤー群から「選択式(slotless)」の Variants 軸を作る（フォルダ不要）。
+  const createAxisFromSelection = () => {
+    if (previewing || selectedLayerIds.size === 0) return;
+    session.addAxisFromLayers('', [...selectedLayerIds]);
+    setSelectedLayerIds(new Set());
+    onEdit();
+  };
+
   const onOpacityInput = (n: LayerNode, v: number) => {
     setOpacityDraft({ id: n.id, v });
     opacityPreviewRef.current = { layerId: n.id, opacity: v };
@@ -1564,10 +1596,16 @@ export function CanvasEditor({
     const leaf = grp ? null : (n as Layer);
     const editing = editingLayerId === n.id;
     const active = !grp && n.id === activeLayerId;
+    const selected = !grp && selectedLayerIds.has(n.id);
     const disableDelete = previewing || leafCount() - collectLeafIds(n).length < 1;
     const dropCls = dropHint?.id === n.id ? ` drop-${dropHint.pos}` : '';
     return (
-      <li key={n.id} className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''}${dropCls}`}>
+      <li
+        key={n.id}
+        className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''} ${
+          selected ? 'selected' : ''
+        }${dropCls}`}
+      >
         <div className="layer-head" data-id={n.id} style={{ paddingLeft: 4 + depth * 12 }}>
           <span
             className="layer-grip"
@@ -1613,9 +1651,9 @@ export function CanvasEditor({
           ) : (
             <span
               className="layer-name"
-              onClick={() => (grp ? toggleCollapse(grp) : setActiveLayerId(n.id))}
+              onClick={(e) => onLayerClick(n, e)}
               onDoubleClick={() => startRename(n)}
-              title="クリックで選択/開閉 / ダブルクリックで名称変更"
+              title="クリックで選択/開閉 / Ctrl・⌘+クリックで複数選択 / ダブルクリックで名称変更"
             >
               {grp ? '📁 ' : ''}
               {n.name}
@@ -1944,6 +1982,13 @@ export function CanvasEditor({
             </button>
             <button onClick={clearActiveLayer} disabled={previewing} title="アクティブレイヤーを全消去">
               Clear
+            </button>
+            <button
+              onClick={createAxisFromSelection}
+              disabled={previewing || selectedLayerIds.size === 0}
+              title="選択したレイヤーを別案セルとして新しい Variants 軸に登録（フォルダ不要）"
+            >
+              → Variants ({selectedLayerIds.size})
             </button>
           </div>
           <input

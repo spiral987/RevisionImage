@@ -617,6 +617,11 @@ button.active {
   border-color: var(--accent);
 }
 
+/* Ctrl/⌘+クリックの複数選択（Variants 軸化の対象）。active の枠と併用できる淡い塗り。 */
+.layer-item.selected {
+  background: rgba(91, 157, 255, 0.16);
+}
+
 .layer-head {
   display: flex;
   align-items: center;
@@ -881,8 +886,8 @@ button.active {
   font-variant-numeric: tabular-nums;
 }
 
-.revg-node-stack {
-  fill: #15161a;
+.revg-stage {
+  position: relative;
 }
 
 .revg-scroll {
@@ -901,92 +906,65 @@ button.active {
 }
 
 .revg-svg {
+  position: absolute;
+  inset: 0;
   display: block;
+  pointer-events: none;
 }
 
 .revg-edge {
   stroke: #59616f;
-  stroke-width: 1.5;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.revg-node {
-  cursor: pointer;
+/* 履歴ツリーのカード（ThumbCard を node 中心に絶対配置）。 */
+.revg-card-pos {
+  position: absolute;
+  transform: translate(-50%, -50%);
 }
 
-.revg-node-bg {
-  fill: #1b1c21;
-}
-
-.revg-node.selected .revg-node-bg {
-  fill: #232733;
-}
-
-.revg-node:hover .revg-node-bg {
-  fill: #262932;
-}
-
-.revg-label {
-  fill: var(--text);
-  font-size: 10px;
-  font-family: system-ui, sans-serif;
-  pointer-events: none;
-}
-
-/* コミット点（リビジョン head）のラベルタグ。 */
-.revg-commit-tag {
-  fill: #1a1a1a;
-  font-size: 9px;
-  font-weight: 600;
-  font-family: system-ui, sans-serif;
-  pointer-events: none;
-}
-
-/* コミットノード右クリックメニュー（Figure 2 の右クリックメニュー相当）。 */
-.revg-menu {
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  min-width: 200px;
-  padding: 4px;
-  background: var(--panel);
+/* 集約ノード（複数 op を畳んだもの）は「重なり」で表現（box-shadow と競合しない疑似要素）。 */
+.revg-card.stacked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  background: var(--panel-2);
+  transform: translate(4px, 4px);
 }
-.revg-menu-head {
-  padding: 4px 8px 6px;
-  color: var(--muted);
-  font-size: 11px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 4px;
+
+/* ピック待ち中、選択可能なコミットカードを強調。 */
+.revg-card.pickable {
+  outline: 2px dashed #f2c94c;
+  outline-offset: 2px;
 }
-.revg-menu button {
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  padding: 7px 8px;
+
+.revg-star {
+  color: #f2c94c;
+}
+
+.revg-now {
+  color: var(--accent);
+}
+
+/* コミットカードの ⋯ トリガ（ThumbCard のホバー層に出す）。 */
+.revg-card-menu {
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 1.4;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
   color: var(--text);
   cursor: pointer;
-  font-size: 12px;
 }
-.revg-menu button:hover:not(:disabled) {
-  background: #2a2e3a;
-}
-.revg-menu button:disabled {
-  color: var(--muted);
-  cursor: default;
-}
-.revg-menu-sep {
-  height: 1px;
-  background: var(--border);
-  margin: 4px 2px;
-}
-.revg-menu-danger {
-  color: #eb5757 !important;
-}
-.revg-menu-danger:hover:not(:disabled) {
-  background: rgba(235, 87, 87, 0.16) !important;
+
+.revg-card-menu:hover {
+  background: rgba(0, 0, 0, 0.8);
 }
 
 /* diff/merge の「2つ目を選択」待ちバナー。 */
@@ -1001,10 +979,6 @@ button.active {
 }
 .revg-pending button {
   margin-left: 8px;
-}
-/* ピック待ち中、選択可能なコミットノードを強調。 */
-.revg-node.pickable .revg-node-bg {
-  fill: #2a2e3a;
 }
 
 /* ---- Revisions ---- */
@@ -1040,34 +1014,6 @@ button.active {
   font-size: 13px;
 }
 
-.rev-list {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.rev-list li {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-2);
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.rev-list li.selected {
-  border-color: var(--accent);
-}
-
-.rev-label {
-  font-weight: 600;
-}
 
 /* ---- Diff modal ---- */
 .diff-overlay {
@@ -1194,27 +1140,6 @@ button.active {
   max-height: 180px;
 }
 
-.rev-checkout {
-  margin-left: 6px;
-  padding: 3px 8px;
-  font-size: 12px;
-}
-
-/* コミット削除ボタン（リビジョン一覧）。控えめに置き、hover で赤を強める。 */
-.rev-delete {
-  padding: 3px 7px;
-  font-size: 12px;
-  line-height: 1;
-  border-color: transparent;
-  background: transparent;
-  opacity: 0.6;
-}
-.rev-delete:hover {
-  opacity: 1;
-  border-color: #eb5757;
-  background: rgba(235, 87, 87, 0.14);
-}
-
 .save-indicator {
   font-size: 11px;
   color: #6fcf97;
@@ -1308,6 +1233,11 @@ button.active {
 
 .var-axis-name {
   font-weight: 600;
+  cursor: text;
+}
+
+.var-axis-name:hover {
+  text-decoration: underline dotted;
 }
 
 .var-axis-spacer {
@@ -1421,4 +1351,264 @@ button.active {
   border: 1px solid var(--border);
   border-radius: 4px;
   background: repeating-conic-gradient(#3a3d46 0% 25%, #2f323a 0% 50%) 50% / 12px 12px;
+}
+
+/* ===== ThumbCard（Variants / Revisions 共通の「サムネ第一」カード） ===== */
+.thumb-card {
+  position: relative;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 4px;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    transform 0.08s;
+}
+
+.thumb-card:hover {
+  transform: translateY(-1px);
+}
+
+.thumb-card.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.thumb-card.selected {
+  border-color: var(--accent);
+}
+
+.thumb-card.commit {
+  border-color: #f2c94c;
+  box-shadow: 0 0 0 1px #f2c94c;
+}
+
+.thumb-card.dead {
+  opacity: 0.55;
+  cursor: default;
+  border-style: dashed;
+}
+
+.thumb-card.dead:hover {
+  transform: none;
+}
+
+.thumb-card-img {
+  position: relative;
+  border-radius: 5px;
+  overflow: hidden;
+  background: repeating-conic-gradient(#3a3d46 0% 25%, #2f323a 0% 50%) 50% / 12px 12px;
+}
+
+.thumb-card-img img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.thumb-card-badge {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  padding: 1px 3px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--accent);
+  pointer-events: none;
+}
+
+.thumb-card-star {
+  position: absolute;
+  bottom: 3px;
+  left: 3px;
+  padding: 1px 3px;
+  font-size: 13px;
+  line-height: 1;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #f2c94c;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.thumb-card:hover .thumb-card-star,
+.thumb-card-star.on {
+  opacity: 1;
+}
+
+.thumb-card-hover {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.thumb-card:hover .thumb-card-hover {
+  opacity: 1;
+}
+
+.thumb-card-corner {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  opacity: 0.55;
+  transition: opacity 0.12s;
+}
+
+.thumb-card:hover .thumb-card-corner {
+  opacity: 1;
+}
+
+.tc-act {
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tc-act:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.tc-act.danger:hover {
+  color: #eb8f8f;
+}
+
+.thumb-card-name {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+  font-size: 11px;
+}
+
+.thumb-card-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.thumb-card-label.editable {
+  cursor: text;
+}
+
+.thumb-card-label.editable:hover {
+  text-decoration: underline dotted;
+}
+
+.thumb-card-name input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 1px 3px;
+  font-size: 11px;
+}
+
+.thumb-card-hint {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.var-src-mark {
+  color: var(--accent);
+}
+
+/* ===== Variants 棚（横一列） ===== */
+.var-shelf {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+}
+
+.var-axis-slot {
+  font-size: 11px;
+}
+
+.var-axis-name-input {
+  max-width: 140px;
+  padding: 1px 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.var-icon {
+  padding: 1px 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.var-icon.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.var-pickrev {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+/* ===== PopoverMenu（body 直下に portal） ===== */
+.popover-menu {
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.popover-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.popover-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.popover-item.danger {
+  color: #eb8f8f;
+}
+
+.popover-check {
+  flex: 0 0 auto;
+  width: 12px;
+  color: var(--accent);
 }

@@ -112,6 +112,24 @@ describe('空間軸（Variants）データモデル', () => {
     expect(s.axes.length).toBe(0);
   });
 
+  it('renameAxis / renameCell: 注釈のみ変更（空文字・不明 id は無視）', () => {
+    const { s, axis } = buildAxisSession();
+
+    expect(s.renameAxis(axis.id, '  口  ')).toBe(true); // trim される
+    expect(s.getAxis(axis.id)!.name).toBe('口');
+    expect(s.renameAxis(axis.id, '   ')).toBe(false); // 空文字は無視
+    expect(s.renameAxis('no-such-axis', 'x')).toBe(false);
+    expect(s.getAxis(axis.id)!.name).toBe('口');
+
+    expect(s.renameCell(axis.id, 'cellB', '笑顔')).toBe(true);
+    expect(s.getAxis(axis.id)!.cells.find((c) => c.id === 'cellB')!.name).toBe('笑顔');
+    expect(s.renameCell(axis.id, 'cellB', '')).toBe(false);
+    expect(s.renameCell(axis.id, 'no-such-cell', 'x')).toBe(false);
+
+    // 改名はサイドカーのみ＝ログを汚さない（replay 整合を保つ）。
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+  });
+
   it('JSON 往復で axes が保たれる（sourceRevId 含む）', () => {
     const { s, axis } = buildAxisSession();
     s.addCell(axis.id, { id: 'cellD', name: '目D（過去版由来）', sourceRevId: 'rev-xyz' });
@@ -354,6 +372,52 @@ describe('Variants: レイヤー構造が壊れても安全に劣化', () => {
     expect(getNode(s.state, 'cellB')).toBeDefined(); // ノード自体は存命
     s.syncAxisCells(axis.id);
     expect(s.getAxis(axis.id)!.cells.map((c) => c.id)).toEqual(['cellA', 'cellC']);
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+  });
+});
+
+describe('Variants: 選択式(slotless)軸（フォルダ不要）', () => {
+  const P = { color: [10, 10, 10] as [number, number, number], size: 4, opacity: 1 };
+
+  it('addAxisFromLayers: 任意のレイヤーをフォルダなしでセルにする（存在しない id は除外）', () => {
+    const s = new EditorSession(W, H);
+    for (const id of ['L1', 'L2', 'L3']) s.apply(createAddLayerOp(id, id, W, H));
+    const axis = s.addAxisFromLayers('表情', ['L1', 'L2', 'L3', 'nope']);
+    expect(axis.slotId).toBeUndefined();
+    expect(axis.cells.map((c) => c.id)).toEqual(['L1', 'L2', 'L3']); // nope は除外
+
+    // トグルが効き、replay 整合。
+    expect(s.toggleCell(axis.id, 'L2')).toBe(true);
+    expect(getNode(s.state, 'L2')!.visible).toBe(false);
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+  });
+
+  it('slotless では sync/park は no-op、preview/onion は動く', () => {
+    const s = new EditorSession(W, H);
+    s.apply(createAddLayerOp('L1', 'L1', W, H));
+    s.apply(createAddLayerOp('L2', 'L2', W, H));
+    const axis = s.addAxisFromLayers('a', ['L1', 'L2']);
+    expect(s.syncAxisCells(axis.id)).toBe(false); // 同期対象フォルダ無し
+    expect(s.parkSlot(axis.id)).toBe(false); // 退避領域無し
+    const pv = cellPreviewState(s.state, axis, 'L1'); // L1 だけ可視
+    expect(getNode(pv, 'L1')!.visible).toBe(true);
+    expect(getNode(pv, 'L2')!.visible).toBe(false);
+    expect(() => onionSkinState(s.state, axis)).not.toThrow();
+  });
+
+  it('slotless に addRevisionAsCell すると最上位に取り込みセル化（replay 整合）', () => {
+    const s = new EditorSession(W, H);
+    s.apply(createAddLayerOp('L1', 'L1', W, H));
+    const axis = s.addAxisFromLayers('a', ['L1']);
+    s.apply(createBrushOp('L1', line(2, 2, 12, 12, 5), P, W, H));
+    const rev = s.commitRevision('v1');
+
+    expect(s.addRevisionAsCell(axis.id, rev)).toBe(true);
+    const cells = s.getAxis(axis.id)!.cells;
+    expect(cells.length).toBe(2);
+    const added = cells[cells.length - 1];
+    expect(added.sourceRevId).toBe(rev.id);
+    expect(getNode(s.state, added.id)!.visible).toBe(false); // 初期は非表示
     expect(statesEqual(s.state, replay(s))).toBe(true);
   });
 });
