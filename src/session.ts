@@ -1,4 +1,4 @@
-import type { Dag, EditorState, Operation, VariantAxis, VariantCell } from './types';
+import type { BoardLayout, Dag, EditorState, Operation, VariantAxis, VariantCell } from './types';
 import { applyOperation } from './engine/operation';
 import { createInitialState, getNode } from './engine/editorState';
 import { isGroup, firstLeafId } from './engine/layer';
@@ -46,6 +46,11 @@ export class EditorSession {
    * サイドカーとして保持する（操作依存グラフの不変条件に触れない）。永続化対象。
    */
   axes: VariantAxis[] = [];
+  /**
+   * 盤面(Board) のカード自由配置（中心座標）。操作ログ・DAG に無関係なサイドカー（[[axes]] と同様）。
+   * キー = コミット id / セル(レイヤー) id / 起点・作業の予約 id。永続化対象。
+   */
+  boardLayout: BoardLayout = {};
   width: number;
   height: number;
 
@@ -258,6 +263,20 @@ export class EditorSession {
     return this.axes.find((a) => a.id === axisId);
   }
 
+  // ---- 盤面(Board) の自由配置（サイドカー） ----
+  getBoardPos(id: string): { x: number; y: number } | undefined {
+    return this.boardLayout[id];
+  }
+
+  setBoardPos(id: string, x: number, y: number): void {
+    this.boardLayout[id] = { x, y };
+  }
+
+  /** 自由配置をすべて消す（= 自動整列に戻す）。 */
+  clearBoardLayout(): void {
+    this.boardLayout = {};
+  }
+
   /** 軸名を変更する（サイドカーの注釈のみ。レイヤー実体・replay には無関係）。空文字は無視。 */
   renameAxis(axisId: string, name: string): boolean {
     const axis = this.getAxis(axisId);
@@ -451,6 +470,7 @@ export class EditorSession {
     log: readonly Operation[];
     revisions: readonly CommittedRevision[];
     axes?: readonly VariantAxis[];
+    boardLayout?: BoardLayout;
   }): void {
     if (typeof p.width === 'number' && typeof p.height === 'number') {
       this.width = p.width;
@@ -470,6 +490,7 @@ export class EditorSession {
       slotId: a.slotId,
       cells: a.cells.map((c) => ({ id: c.id, name: c.name, sourceRevId: c.sourceRevId })),
     }));
+    this.boardLayout = { ...(p.boardLayout ?? {}) };
   }
 
   reset(): void {
@@ -477,6 +498,7 @@ export class EditorSession {
     this.logger.clear();
     this.revisions = [];
     this.axes = [];
+    this.boardLayout = {};
     this.undoStack = [];
     this.redoStack = [];
   }

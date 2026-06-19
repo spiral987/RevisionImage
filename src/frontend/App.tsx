@@ -23,9 +23,6 @@ const SIZE_PRESETS: [number, number][] = [
   [1280, 720],
 ];
 
-// 盤面のレイアウトモデル（ブランチごとに切替）: hybrid=木は自動/差分は自由, free=全部自由配置。
-const BOARD_MODE: 'hybrid' | 'free' = 'free';
-
 export function App() {
   const sessionRef = useRef<EditorSession | null>(null);
   if (!sessionRef.current) sessionRef.current = new EditorSession(800, 600);
@@ -62,6 +59,7 @@ export function App() {
       log: session.getLog(),
       revisions: session.revisions,
       axes: session.axes,
+      boardLayout: session.boardLayout,
     });
 
   // 時間の読み: 過去の版と「現在の作業状態」を見比べる（CONCEPT §2-4「過去と現在を見比べたい」）。
@@ -352,7 +350,6 @@ export function App() {
         <BoardView
           session={session}
           version={version}
-          mode={BOARD_MODE}
           onEdit={onEdit}
           onCheckout={(rev) => checkout(rev)}
           onCompareRevisions={(a, b) => setDiffPair([a, b])}

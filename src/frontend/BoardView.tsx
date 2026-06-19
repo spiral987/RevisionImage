@@ -28,7 +28,6 @@ const PAD = 28;
 const ROOT = '__root__';
 const WORK = '__work__';
 
-type BoardMode = 'hybrid' | 'free';
 type Pt = { x: number; y: number };
 
 /** a.ops が b.ops の真の接頭辞か（= a から b へ伸びた履歴）。 */
@@ -44,15 +43,14 @@ function opsMatchPrefix(prefix: readonly Operation[], log: readonly Operation[])
 }
 
 /**
- * 盤面(Board): Revisions(時間=コミットの木) と Variants(空間=差分セル) を1枚に統合した実験UI。
- * - hybrid: コミットの木は自動レイアウトで中央、差分セルだけ自由配置。
- * - free:   コミットも差分セルも全部ドラッグで自由配置（木は初期配置のみ）。
+ * 盤面(Board): Revisions(時間=コミットの木) と Variants(空間=差分セル) を1枚に統合したUI。
+ * 全自由配置: コミットも差分セルも全部ドラッグで動かせる（木は初期配置のみ、以後はユーザ配置を優先）。
+ * カード位置は session.boardLayout に永続化（リロードしても保たれる）。
  * 差分セルが過去版由来(sourceRevId)なら、その元コミットへ点線コネクタを引く（時間↔空間の橋）。
  */
 export function BoardView({
   session,
   version,
-  mode,
   onEdit,
   onCheckout,
   onCompareRevisions,
@@ -63,7 +61,6 @@ export function BoardView({
 }: {
   session: EditorSession;
   version: number;
-  mode: BoardMode;
   onEdit: () => void;
   onCheckout: (rev: CommittedRevision) => void;
   onCompareRevisions: (a: CommittedRevision, b: CommittedRevision) => void;
@@ -83,8 +80,8 @@ export function BoardView({
     null,
   );
 
-  // 位置ストア（中心座標, 非永続=プロトタイプ）。tick で再描画。
-  const posRef = useRef(new Map<string, Pt>());
+  // 位置は session.boardLayout（中心座標, 永続）に保存。seedRef は未配置セルの初期位置（非永続）。
+  // session の直接変更は React に追えないので、ドラッグ中は tick で再描画する。
   const seedRef = useRef(new Map<string, Pt>());
   const [, force] = useState(0);
   const tick = () => force((n) => n + 1);
@@ -171,8 +168,7 @@ export function BoardView({
     const n = layout.nodes.get(id);
     return n ? { x: n.x + PAD, y: n.y + PAD } : { x: PAD, y: PAD };
   };
-  const commitCenter = (id: string): Pt =>
-    (mode === 'free' && posRef.current.get(id)) || treeCenter(id);
+  const commitCenter = (id: string): Pt => session.getBoardPos(id) ?? treeCenter(id);
 
   // 差分セルの初期配置（木の右側に軸ごと積む）。一度決めたら seedRef で安定。
   const treeRight = layout.width + PAD * 2;
@@ -187,7 +183,7 @@ export function BoardView({
     return seed;
   };
   const cellCenter = (id: string, axisIdx: number, cellIdx: number): Pt =>
-    posRef.current.get(id) ?? cellSeed(axisIdx, cellIdx, id);
+    session.getBoardPos(id) ?? cellSeed(axisIdx, cellIdx, id);
 
   // ---- ドラッグ（クリックと閾値で区別） ----
   const dragRef = useRef<{ id: string; sx: number; sy: number; bx: number; by: number; moved: boolean } | null>(
@@ -208,7 +204,7 @@ export function BoardView({
     const dy = e.clientY - d.sy;
     if (!d.moved && Math.hypot(dx, dy) < 4) return;
     d.moved = true;
-    posRef.current.set(d.id, { x: d.bx + dx, y: d.by + dy });
+    session.setBoardPos(d.id, d.bx + dx, d.by + dy);
     tick();
   };
   const onUp = (e: ReactPointerEvent) => {
@@ -219,7 +215,10 @@ export function BoardView({
     } catch {
       /* noop */
     }
-    if (d.moved) suppressRef.current = d.id;
+    if (d.moved) {
+      suppressRef.current = d.id;
+      onEdit(); // 配置の永続化（autosave をトリガ）
+    }
     dragRef.current = null;
   };
   const onClickCapture = (e: ReactMouseEvent, id: string) => {
@@ -245,9 +244,9 @@ export function BoardView({
     onEdit();
   };
   const resetLayout = () => {
-    posRef.current.clear();
+    session.clearBoardLayout();
     seedRef.current.clear();
-    tick();
+    onEdit();
   };
   const onNodeClick = (id: string, rev: CommittedRevision | null) => {
     if (pending) {
@@ -307,7 +306,6 @@ export function BoardView({
   return (
     <div className="board">
       <div className="board-toolbar">
-        <span className={`board-mode ${mode}`}>{mode === 'hybrid' ? 'ハイブリッド盤面' : '全自由配置'}</span>
         <input
           type="text"
           placeholder="コミットのラベル（任意）"
@@ -336,9 +334,8 @@ export function BoardView({
       </div>
 
       <p className="hint">
-        左の木＝時間（version の系統。★=コミット, 青枠=今いる場所, ダブルクリックで Checkout, ⋯で比較/マージ/削除）。
-        周りのカード＝空間（差分セル。クリックで表示トグル）。
-        {mode === 'free' ? 'すべてドラッグで自由配置。' : '差分セルをドラッグで自由配置。'}
+        木＝時間（version の系統。★=コミット, 青枠=今いる場所, ダブルクリックで Checkout, ⋯で比較/マージ/削除）。
+        カード＝空間（差分セル。クリックで表示トグル）。すべてドラッグで自由配置でき、位置は保存されます。
         過去版由来のセルは元コミットへ点線でつながります。
       </p>
 
@@ -386,7 +383,7 @@ export function BoardView({
             const c = commitCenter(id);
             const isCurrent = id === tree.currentId;
             const isCommit = !!rev;
-            const draggable = mode === 'free';
+            const draggable = true; // 全自由配置: コミット/起点/作業も動かせる
             const state: ThumbCardState = selected === id ? 'selected' : isCurrent ? 'current' : isCommit ? 'commit' : 'normal';
             const title = rev ? `#${indexOfRev(rev)} ${rev.label}` : id === ROOT ? '起点' : '現在（作業中）';
             return (

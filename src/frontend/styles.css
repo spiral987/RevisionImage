@@ -1630,25 +1630,6 @@ button.active {
   min-width: 100px;
 }
 
-.board-mode {
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
-
-.board-mode.hybrid {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.board-mode.free {
-  border-color: #f2994a;
-  color: #f2994a;
-}
-
 .board-spacer {
   flex: 1 1 auto;
 }

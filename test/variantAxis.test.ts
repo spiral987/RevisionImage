@@ -130,9 +130,11 @@ describe('空間軸（Variants）データモデル', () => {
     expect(statesEqual(s.state, replay(s))).toBe(true);
   });
 
-  it('JSON 往復で axes が保たれる（sourceRevId 含む）', () => {
+  it('JSON 往復で axes / boardLayout が保たれる（sourceRevId 含む）', () => {
     const { s, axis } = buildAxisSession();
     s.addCell(axis.id, { id: 'cellD', name: '目D（過去版由来）', sourceRevId: 'rev-xyz' });
+    s.setBoardPos('cellA', 120, 40); // 盤面の自由配置
+    s.setBoardPos('rev-1', -10, 200);
 
     const json = JSON.parse(
       JSON.stringify(
@@ -142,6 +144,7 @@ describe('空間軸（Variants）データモデル', () => {
           log: s.getLog(),
           revisions: s.revisions,
           axes: s.axes,
+          boardLayout: s.boardLayout,
         }),
       ),
     );
@@ -154,16 +157,22 @@ describe('空間軸（Variants）データモデル', () => {
     expect(a.slotId).toBe('slot');
     expect(a.cells.map((c) => c.id)).toEqual(['cellA', 'cellB', 'cellC', 'cellD']);
     expect(a.cells.find((c) => c.id === 'cellD')!.sourceRevId).toBe('rev-xyz');
+    expect(restored.getBoardPos('cellA')).toEqual({ x: 120, y: 40 });
+    expect(restored.getBoardPos('rev-1')).toEqual({ x: -10, y: 200 });
   });
 
-  it('reset / loadProject(axes 省略) は axes を空にする', () => {
+  it('reset / loadProject(axes 省略) は axes / boardLayout を空にする', () => {
     const { s } = buildAxisSession();
+    s.setBoardPos('cellA', 5, 5);
     s.reset();
     expect(s.axes.length).toBe(0);
+    expect(s.getBoardPos('cellA')).toBeUndefined();
 
     const { s: s2 } = buildAxisSession();
-    s2.loadProject({ log: [], revisions: [] }); // axes 省略
+    s2.setBoardPos('cellA', 9, 9);
+    s2.loadProject({ log: [], revisions: [] }); // axes / boardLayout 省略
     expect(s2.axes.length).toBe(0);
+    expect(s2.getBoardPos('cellA')).toBeUndefined();
   });
 });
 

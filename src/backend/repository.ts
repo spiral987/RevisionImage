@@ -1,4 +1,4 @@
-import type { Operation, VariantAxis } from '../types';
+import type { BoardLayout, Operation, VariantAxis } from '../types';
 import type { CommittedRevision } from './revision';
 
 // 永続化（SPEC §Phase7 / §2）。
@@ -14,6 +14,8 @@ export interface ProjectJSON {
   revisions: CommittedRevision[];
   /** 空間軸（Variants）。旧バージョンの保存物には無いので optional（読み込み時 [] 既定）。 */
   axes?: VariantAxis[];
+  /** 盤面(Board) のカード自由配置。旧保存物には無いので optional（読み込み時 {} 既定）。 */
+  boardLayout?: BoardLayout;
 }
 
 export interface ProjectData {
@@ -22,6 +24,7 @@ export interface ProjectData {
   log: readonly Operation[];
   revisions: readonly CommittedRevision[];
   axes?: readonly VariantAxis[];
+  boardLayout?: BoardLayout;
 }
 
 export function serializeProject(data: ProjectData): ProjectJSON {
@@ -33,6 +36,7 @@ export function serializeProject(data: ProjectData): ProjectJSON {
     log: data.log.map((o) => o),
     revisions: data.revisions.map((r) => ({ ...r, ops: [...r.ops] })),
     axes: (data.axes ?? []).map((a) => ({ ...a, cells: a.cells.map((c) => ({ ...c })) })),
+    boardLayout: { ...(data.boardLayout ?? {}) },
   };
 }
 

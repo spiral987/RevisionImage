@@ -98,6 +98,12 @@ export interface VariantAxis {
   cells: VariantCell[]; // 順序付きセル一覧。各セルは独立にトグル（表示/非表示）する。
 }
 
+/**
+ * 盤面(Board) 上のカード配置（自由配置の永続化）。キー = コミット(リビジョン)id / セル(レイヤー)id /
+ * 起点・作業ノードの予約 id。値 = 中心座標。操作ログ・DAG とは無関係なサイドカー（Variants と同じ扱い）。
+ */
+export type BoardLayout = Record<string, { x: number; y: number }>;
+
 // --- エンジン状態 -----------------------------------------------------------
 
 /** 生のピクセルバッファ。DOM の ImageData に依存せず純TSで扱える形にする。 */
