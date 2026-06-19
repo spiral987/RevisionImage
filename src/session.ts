@@ -210,9 +210,12 @@ export class EditorSession {
   }
 
   /**
-   * Selective undo（原論文「過去の操作を無かったことにする」）。指定操作とその依存（DAG の子孫）を
+   * Selective undo（NRCI「過去の操作を無かったことにする」）。指定操作とその依存（DAG の子孫）を
    * 作業ログから取り除き、残りを初期状態から決定的に再生する。依存しない後続はそのまま残る。
-   * checkout と違い undoStack に積むので 1 回の Undo で元へ戻せる（履歴は消さない）。除去できたら true。
+   * undoStack に積むので 1 回の Undo で即戻せる。ただし undoStack は揮発・有界なので、
+   * **恒久的な非破壊性（NRCI は履歴 DAG を消さない）は呼び出し側が事前に commitRevision で担保する**
+   * （App.doSelectiveUndo は autoCheckpointIfDirty で取り消し前状態をリビジョン化する。checkout と同方針）。
+   * 除去できたら true。
    */
   selectiveUndo(opIds: string | readonly string[]): boolean {
     const drop = this.selectiveUndoTargets(opIds);

@@ -88,6 +88,36 @@ describe('selective undo（原論文: 過去操作を無かったことにする
     expect(statesEqual(s.state, replay(s))).toBe(true);
   });
 
+  it('非破壊（NRCI）: 取り消し前にコミットすれば外した操作はリビジョンに残り完全復元できる', () => {
+    const a = dot(10, 10);
+    const b = dot(11, 11); // a に依存
+    const c = dot(55, 55);
+    const s = sessionWith(a, b, c);
+
+    // App.doSelectiveUndo の autoCheckpointIfDirty 相当（取り消し前状態を永続化）。
+    const rev = s.commitRevision('before undo');
+    s.selectiveUndo(a.id);
+
+    // 作業ログからは外れるが…
+    expect(s.getLog().map((o) => o.id)).toEqual([c.id]);
+    // 取り消した操作はリビジョン（永続）に残っており、恒久的には失われない。
+    expect(rev.ops.map((o) => o.id)).toEqual([a.id, b.id, c.id]);
+    // checkout/branch でその版へ戻れば完全復元できる。
+    s.checkout(rev.ops);
+    expect(s.getLog().map((o) => o.id)).toEqual([a.id, b.id, c.id]);
+    expect(statesEqual(s.state, replay(s))).toBe(true);
+  });
+
+  it('selectiveUndo はコミット済みリビジョンを書き換えない（作業ログのみ操作）', () => {
+    const a = dot(10, 10);
+    const b = dot(11, 11);
+    const s = sessionWith(a, b);
+    const rev = s.commitRevision('snap');
+    const before = rev.ops.map((o) => o.id);
+    s.selectiveUndo(a.id);
+    expect(rev.ops.map((o) => o.id)).toEqual(before); // リビジョンは不変
+  });
+
   it('root / 作業ログに無い id は no-op', () => {
     const a = dot(10, 10);
     const s = sessionWith(a);

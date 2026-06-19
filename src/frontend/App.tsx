@@ -254,19 +254,23 @@ export function App() {
     setSelectedNodeId(null);
   };
 
-  // selective undo（原論文）: RevG のノードから、その操作と依存する後続を作業ログから除去する。
-  // 依存で連鎖除去される場合は件数を確認してから実行（1回の Undo で戻せる）。
+  // selective undo（NRCI）: 指定操作と依存する後続を作業ログから除去する。NRCI は履歴(DAG)を消さない
+  // 非破壊設計なので、取り消し前の状態を必ずリビジョンとして保存してから実行する（checkout/branch と同じ）。
+  // これで外した操作はリビジョンに残り、いつでも checkout/branch で復元・遡行できる。Ctrl/⌘+Z でも即戻せる。
   const doSelectiveUndo = (opIds: string[]) => {
     const drop = session.selectiveUndoTargets(opIds);
     if (drop.size === 0) return;
     if (
       drop.size > opIds.length &&
       !window.confirm(
-        `この操作に依存する後続も含め、合計 ${drop.size} 操作を取り消します。\n（Ctrl/⌘+Z で元に戻せます）よろしいですか？`,
+        `この操作に依存する後続も含め、合計 ${drop.size} 操作を取り消します。\n` +
+          `取り消し前の状態は自動保存され（リビジョン化）、Ctrl/⌘+Z でも戻せます。よろしいですか？`,
       )
     )
       return;
+    autoCheckpointIfDirty(); // 非破壊: 取り消し前の状態を永続的に残す
     if (!session.selectiveUndo(opIds)) return;
+    setRevisions([...session.revisions]); // 自動チェックポイントでリビジョンが増えうる
     setSelectedNodeId(null);
     setVersion((v) => v + 1);
   };
