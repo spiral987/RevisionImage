@@ -254,6 +254,23 @@ export function App() {
     setSelectedNodeId(null);
   };
 
+  // selective undo（原論文）: RevG のノードから、その操作と依存する後続を作業ログから除去する。
+  // 依存で連鎖除去される場合は件数を確認してから実行（1回の Undo で戻せる）。
+  const doSelectiveUndo = (opIds: string[]) => {
+    const drop = session.selectiveUndoTargets(opIds);
+    if (drop.size === 0) return;
+    if (
+      drop.size > opIds.length &&
+      !window.confirm(
+        `この操作に依存する後続も含め、合計 ${drop.size} 操作を取り消します。\n（Ctrl/⌘+Z で元に戻せます）よろしいですか？`,
+      )
+    )
+      return;
+    if (!session.selectiveUndo(opIds)) return;
+    setSelectedNodeId(null);
+    setVersion((v) => v + 1);
+  };
+
   const onMerged = (mergedOps: Operation[], label: string) => {
     autoCheckpointIfDirty(); // マージ確定も作業ログを置き換えるので、未コミット作業を先に保存
     session.checkout(mergedOps);
@@ -397,6 +414,7 @@ export function App() {
             onMergeRevisions={(a, b) => setMergePair([a, b])}
             onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
             onDeleteRevision={(rev) => deleteRev(rev)}
+            onSelectiveUndo={doSelectiveUndo}
           />
         </section>
       </FloatWindow>

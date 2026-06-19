@@ -10,6 +10,7 @@ import {
 } from './engine/operations';
 import { Logger } from './backend/logger';
 import { buildDag } from './backend/dagBuilder';
+import { ROOT_ID, descendantsOf } from './backend/dag';
 import {
   buildUnifiedDag,
   computeHeads,
@@ -189,6 +190,37 @@ export class EditorSession {
   getUnifiedDag(): Dag {
     const branches = [...this.revisions, { ops: this.getLog() }];
     return buildUnifiedDag(branches, this.width, this.height);
+  }
+
+  /**
+   * Selective undo で取り除かれる操作 id 集合（プレビュー用・副作用なし）。
+   * 指定操作そのもの＋依存DAG上の子孫（=その操作に依存する後続）。作業ログに無い id・root は対象外。
+   */
+  selectiveUndoTargets(opIds: string | readonly string[]): Set<string> {
+    const ids = typeof opIds === 'string' ? [opIds] : opIds;
+    const logIds = new Set(this.getLog().map((o) => o.id));
+    const dag = this.getDag();
+    const drop = new Set<string>();
+    for (const id of ids) {
+      if (id === ROOT_ID || !logIds.has(id)) continue;
+      drop.add(id);
+      for (const d of descendantsOf(dag, id)) if (logIds.has(d)) drop.add(d);
+    }
+    return drop;
+  }
+
+  /**
+   * Selective undo（原論文「過去の操作を無かったことにする」）。指定操作とその依存（DAG の子孫）を
+   * 作業ログから取り除き、残りを初期状態から決定的に再生する。依存しない後続はそのまま残る。
+   * checkout と違い undoStack に積むので 1 回の Undo で元へ戻せる（履歴は消さない）。除去できたら true。
+   */
+  selectiveUndo(opIds: string | readonly string[]): boolean {
+    const drop = this.selectiveUndoTargets(opIds);
+    if (drop.size === 0) return false;
+    this.pushSnapshot(this.undoStack);
+    this.redoStack = [];
+    this.restore(this.getLog().filter((op) => !drop.has(op.id)));
+    return true;
   }
 
   /** 現在の操作列をリビジョンとして確定（commit / check-in）する。 */

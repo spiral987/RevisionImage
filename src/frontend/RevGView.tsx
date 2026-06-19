@@ -63,6 +63,7 @@ export const RevGView = memo(function RevGView({
   onMergeRevisions,
   onCompareWithCurrent,
   onDeleteRevision,
+  onSelectiveUndo,
 }: {
   session: EditorSession;
   // 統合DAG（全リビジョン + 作業ログを重ねたもの）。
@@ -81,6 +82,8 @@ export const RevGView = memo(function RevGView({
   onMergeRevisions: (trunk: CommittedRevision, branch: CommittedRevision) => void;
   onCompareWithCurrent: (rev: CommittedRevision) => void;
   onDeleteRevision: (rev: CommittedRevision) => void;
+  // selective undo: 作業ログ上の操作（とその依存）を無かったことにする（原論文）。
+  onSelectiveUndo: (opIds: string[]) => void;
 }) {
   const log = session.getLog();
   const [resolution, setResolution] = useState(1);
@@ -257,6 +260,8 @@ export const RevGView = memo(function RevGView({
   const totalNodes = dag.nodes.size;
   // 「現在いる場所」＝作業ログの先頭（末尾 op）。空なら ROOT。
   const currentTipId = log.length ? log[log.length - 1].id : ROOT_ID;
+  // 作業ログに属する op id（selective undo の対象になりうるノード）。
+  const workingIds = new Set(log.map((o) => o.id));
 
   return (
     <div className="revg">
@@ -349,6 +354,17 @@ export const RevGView = memo(function RevGView({
             ) : isTip ? (
               <span className="revg-now">●</span>
             ) : undefined;
+            // カードの ⋯ メニュー: コミット操作 ＋（作業ログ上なら）selective undo。
+            const undoTargets = [cluster.id, ...cluster.memberIds].filter((id) => workingIds.has(id));
+            const menuItems: MenuItem[] = isCommit ? commitMenu(rev!) : [];
+            if (undoTargets.length > 0) {
+              menuItems.push({
+                label: 'この操作を取り消す（依存も除去）',
+                title: 'この操作とそれに依存する後続を作業ログから除去（selective undo）',
+                danger: true,
+                onClick: () => onSelectiveUndo(undoTargets),
+              });
+            }
             return (
               <div
                 key={cluster.id}
@@ -368,12 +384,8 @@ export const RevGView = memo(function RevGView({
                   onActivate={() => onNodeClick(cluster.id)}
                   onDoubleClick={isCommit ? () => onCheckoutRevision(rev!) : undefined}
                   cornerMenu={
-                    isCommit ? (
-                      <PopoverMenu
-                        className="revg-card-menu"
-                        title="このコミットの操作"
-                        items={commitMenu(rev!)}
-                      />
+                    menuItems.length > 0 ? (
+                      <PopoverMenu className="revg-card-menu" title="操作" items={menuItems} />
                     ) : undefined
                   }
                 />
