@@ -211,6 +211,10 @@ export function CanvasEditor({
   const shapeRef = useRef<{ startX: number; startY: number } | null>(null);
   // S キー押下中の「太さ調整モード」での上下ドラッグ（押下時の clientY と太さを控える）。
   const sizeDragRef = useRef<{ startY: number; startSize: number } | null>(null);
+  // Z キー押下中の「ズームモード」での上下ドラッグ（押下時の clientY・倍率・カーソル位置を控える）。
+  const zoomDragRef = useRef<{ startY: number; startZoom: number; anchorX: number; anchorY: number } | null>(
+    null,
+  );
   // レイヤーパネルの D&D 並べ替えでドラッグ中のノード id。
   const dragIdRef = useRef<string | null>(null);
   // ドラッグ中に pointer へ追従する半透明ゴースト要素。
@@ -218,6 +222,7 @@ export function CanvasEditor({
 
   const [tool, setTool] = useState<Tool>('brush');
   const [sizeAdjust, setSizeAdjust] = useState(false); // S キー押下中 = 太さ調整モード
+  const [zoomKey, setZoomKey] = useState(false); // Z キー押下中 = ズームモード
   const [color, setColor] = useState('#e23b3b');
   // size はツールごとに保持する（Brush と Eraser で別々の太さを記憶）。
   const [sizes, setSizes] = useState<Record<string, number>>({ brush: 6, eraser: 16, line: 4, rect: 4 });
@@ -434,14 +439,18 @@ export function CanvasEditor({
       return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
     };
     const down = (e: KeyboardEvent) => {
-      if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !isField(e.target)) {
-        setSizeAdjust(true);
-      }
+      if (e.ctrlKey || e.metaKey || isField(e.target)) return;
+      if (e.key === 's' || e.key === 'S') setSizeAdjust(true);
+      if (e.key === 'z' || e.key === 'Z') setZoomKey(true);
     };
     const up = (e: KeyboardEvent) => {
       if (e.key === 's' || e.key === 'S') setSizeAdjust(false);
+      if (e.key === 'z' || e.key === 'Z') setZoomKey(false);
     };
-    const reset = () => setSizeAdjust(false);
+    const reset = () => {
+      setSizeAdjust(false);
+      setZoomKey(false);
+    };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     window.addEventListener('blur', reset);
@@ -928,6 +937,13 @@ export function CanvasEditor({
       canvasRef.current?.setPointerCapture?.(e.pointerId);
       return;
     }
+    // Z 押下中（ズームモード）: 押下位置をカーソル基準に、上下ドラッグで拡大/縮小。
+    if (zoomKey) {
+      e.preventDefault();
+      zoomDragRef.current = { startY: e.clientY, startZoom: zoomRef.current, anchorX: e.clientX, anchorY: e.clientY };
+      canvasRef.current?.setPointerCapture?.(e.pointerId);
+      return;
+    }
     if (previewing) return;
     const c = canvasRef.current!;
     c.setPointerCapture?.(e.pointerId);
@@ -995,6 +1011,12 @@ export function CanvasEditor({
       const d = panningRef.current;
       setPan(clampPan({ x: d.left + (e.clientX - d.x), y: d.top + (e.clientY - d.y) }));
       if (showCursor) moveCursor(e.clientX, e.clientY); // パン中もリングカーソルを追従させる
+      return;
+    }
+    // ズームドラッグ中: 上=拡大 / 下=縮小。押下時のカーソル位置を基準に保つ（zoomToAnchor）。
+    if (zoomDragRef.current) {
+      const d = zoomDragRef.current;
+      zoomToAnchor(d.startZoom * Math.pow(1.01, d.startY - e.clientY), d.anchorX, d.anchorY);
       return;
     }
     // 太さ調整ドラッグ中: 上=太く / 下=細く。リングは押下位置に固定したまま大きさだけ変える。
@@ -1066,6 +1088,10 @@ export function CanvasEditor({
   const onPointerUp = (e: ReactPointerEvent) => {
     if (panningRef.current) {
       panningRef.current = null;
+      return;
+    }
+    if (zoomDragRef.current) {
+      zoomDragRef.current = null;
       return;
     }
     if (sizeDragRef.current) {
@@ -1751,7 +1777,7 @@ export function CanvasEditor({
 
   return (
     <div className="editor" ref={paneRef}>
-      <div className="canvas-viewport" ref={viewportRef}>
+      <div className={`canvas-viewport ${zoomKey ? 'zoom-mode' : ''}`} ref={viewportRef}>
         <div className="canvas-pan" style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}>
           <canvas
             ref={canvasRef}
@@ -1812,6 +1838,9 @@ export function CanvasEditor({
         <button onClick={() => zoomByCenter(1.25)} title="拡大">＋</button>
         <button onClick={resetZoom}>100%</button>
         <button onClick={fitZoom}>Fit</button>
+        <span className={`keyhint-badge ${zoomKey ? 'on' : ''}`} title="Z を押しながらキャンバスを上下ドラッグでズーム">
+          Z＋上下ドラッグ＝ズーム
+        </span>
         <span className="cb-sep" />
         <span className="history-label">history</span>
         <input

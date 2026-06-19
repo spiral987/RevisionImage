@@ -285,6 +285,12 @@ body {
   will-change: transform;
 }
 
+/* Z 押下中（ズームモード）はキャンバス全体を上下ドラッグのカーソルに。 */
+.canvas-viewport.zoom-mode,
+.canvas-viewport.zoom-mode canvas {
+  cursor: ns-resize !important;
+}
+
 /* ブラシ/消しゴムのサイズを示すリングカーソル（pointer に追従、当たり判定なし） */
 .brush-cursor {
   position: absolute;
@@ -1651,6 +1657,10 @@ button.active {
     0 10px,
     10px -10px,
     -10px 0;
+}
+
+.board-scroll.zooming {
+  cursor: ns-resize;
 }
 
 .board-stage {
