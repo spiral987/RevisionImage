@@ -9,7 +9,7 @@ import {
 import { useScrollZoom } from './useScrollZoom';
 import type { EditorSession } from '../session';
 import type { CommittedRevision } from '../backend/revision';
-import type { Operation } from '../types';
+import type { BBox, Operation } from '../types';
 import { Replayer } from '../backend/replayer';
 import { flattenState } from '../engine/composite';
 import { createInitialState, getNode } from '../engine/editorState';
@@ -119,10 +119,31 @@ export function BoardView({
     for (const r of revisions) addChild(parentOf.get(r.id)!, r.id);
     if (showWork) addChild(workParent, WORK);
 
+    // 各ノードの「親からの変更領域」（差分サムネ用）。親 ops は自分の接頭辞なので slice 以降が新規分。
+    const opsLenOf = (id: string) => (id === ROOT ? 0 : (revisions.find((r) => r.id === id)?.ops.length ?? 0));
+    const unionFrom = (ops: readonly Operation[], from: number): BBox | null => {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (let i = from; i < ops.length; i++) {
+        const r = ops[i].region;
+        if (!r || r.w <= 0 || r.h <= 0) continue;
+        x0 = Math.min(x0, r.x);
+        y0 = Math.min(y0, r.y);
+        x1 = Math.max(x1, r.x + r.w);
+        y1 = Math.max(y1, r.y + r.h);
+      }
+      return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+    };
+    const diffRegion = new Map<string, BBox | null>();
+    for (const r of revisions) diffRegion.set(r.id, unionFrom(r.ops, opsLenOf(parentOf.get(r.id)!)));
+    if (showWork) diffRegion.set(WORK, unionFrom(log, opsLenOf(workParent)));
+
     const ids = [ROOT, ...revisions.map((r) => r.id), ...(showWork ? [WORK] : [])];
     // dagre 依存を避け、ここでは layoutNodes を使うため children を渡す。
     const currentId = exact ? exact.id : showWork ? WORK : ROOT;
-    return { ids, children, showWork, currentId };
+    return { ids, children, showWork, currentId, diffRegion };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revisions, log.length]);
 
@@ -132,8 +153,10 @@ export function BoardView({
     return layoutNodes(input, { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 60 });
   }, [tree]);
 
-  // ---- サムネ生成 ----
-  const commitThumbRef = useRef(new Map<string, string>());
+  // ---- サムネ生成（差分領域だけを切り出す） ----
+  const regionKey = (r: BBox | null | undefined) =>
+    r ? `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)},${Math.round(r.h)}` : 'whole';
+  const commitThumbRef = useRef(new Map<string, { rk: string; url: string }>());
   const treeThumbs = useMemo(() => {
     const cache = commitThumbRef.current;
     const w = session.width;
@@ -141,19 +164,25 @@ export function BoardView({
     const m = new Map<string, string>();
     m.set(ROOT, bufferToDataURL(flattenState(createInitialState(w, h)), THUMB_W, THUMB_H));
     for (const r of revisions) {
-      if (!cache.has(r.id)) {
+      // 差分領域は木の形（親）に依存して変わりうるので region key で cache を無効化する。
+      const region = tree.diffRegion.get(r.id) ?? null;
+      const rk = regionKey(region);
+      const c = cache.get(r.id);
+      if (!c || c.rk !== rk) {
         const states = new Replayer(w, h).replayAll(r.ops);
-        cache.set(r.id, bufferToDataURL(flattenState(states[r.ops.length]), THUMB_W, THUMB_H));
+        const url = bufferToDataURL(flattenState(states[r.ops.length]), THUMB_W, THUMB_H, region);
+        cache.set(r.id, { rk, url });
       }
-      m.set(r.id, cache.get(r.id)!);
+      m.set(r.id, cache.get(r.id)!.url);
     }
     // 凍結コミット以外のキャッシュは掃除。
     const liveIds = new Set(revisions.map((r) => r.id));
     for (const id of [...cache.keys()]) if (!liveIds.has(id)) cache.delete(id);
-    if (tree.showWork) m.set(WORK, bufferToDataURL(flattenState(session.state), THUMB_W, THUMB_H));
+    if (tree.showWork)
+      m.set(WORK, bufferToDataURL(flattenState(session.state), THUMB_W, THUMB_H, tree.diffRegion.get(WORK)));
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deferred, revisions, tree.showWork]);
+  }, [deferred, revisions, tree]);
 
   const cellThumbs = useMemo(() => {
     const m = new Map<string, string>();
@@ -318,11 +347,9 @@ export function BoardView({
   };
   const groups = listGroups(session.state);
 
-  // 原寸プレビュー: 木ノードはその状態を replay、セルは合成。差分領域は「直近 op の region」。
+  // 原寸プレビュー: 木ノードはその状態を replay、セルは合成。差分領域はサムネと同じ（親からの変更領域）。
   const openTreePreview = (id: string, rev: CommittedRevision | null) => {
-    const lastRegion = (ops: readonly Operation[]) => (ops.length ? ops[ops.length - 1].region : null);
     let buffer;
-    let diffRegion = null;
     let title;
     if (id === ROOT) {
       buffer = flattenState(createInitialState(session.width, session.height));
@@ -330,14 +357,12 @@ export function BoardView({
     } else if (rev) {
       const st = new Replayer(session.width, session.height).replayAll(rev.ops);
       buffer = flattenState(st[rev.ops.length]);
-      diffRegion = lastRegion(rev.ops);
       title = `#${indexOfRev(rev)} ${rev.label}`;
     } else {
       buffer = flattenState(session.state); // WORK
-      diffRegion = lastRegion(log);
       title = '現在（作業中）';
     }
-    setPreview({ title, buffer, diffRegion });
+    setPreview({ title, buffer, diffRegion: tree.diffRegion.get(id) ?? null });
   };
   const openCellPreview = (axis: (typeof session.axes)[number], cellId: string, name: string) => {
     setPreview({ title: name, buffer: flattenState(cellPreviewState(session.state, axis, cellId)) });

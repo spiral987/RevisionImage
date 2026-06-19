@@ -114,7 +114,8 @@ export const RevGView = memo(function RevGView({
     const gen = (id: string, op: Operation | null, full: ImageBuffer) => {
       cache.set(id, {
         op,
-        thumb: bufferToDataURL(full, THUMB_W, THUMB_H),
+        // サムネはその操作の変更領域(op.region)だけを切り出す（小さくても変更箇所が見える）。ROOT は全体。
+        thumb: bufferToDataURL(full, THUMB_W, THUMB_H, op ? op.region : undefined),
         small: downsampleBuffer(full, IMP_W, IMP_H),
       });
     };
