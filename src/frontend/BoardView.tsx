@@ -18,12 +18,12 @@ import { bufferToDataURL } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
 import { PopoverMenu, type MenuItem } from './Popover';
 
-const THUMB_W = 112;
-const THUMB_H = 84;
-const CARD = 84; // カードのサムネ表示幅
+const THUMB_W = 184; // サムネ生成サイズ（大きいカードでも粗くならないよう拡大）
+const THUMB_H = 138;
+const CARD = 136; // カードのサムネ表示幅
 const CARD_H = Math.round(CARD * 0.75);
-const NODE_W = 110; // ツリー自動レイアウトのノード占有
-const NODE_H = 120;
+const NODE_W = 156; // ツリー自動レイアウトのノード占有（カード幅＋余白）
+const NODE_H = 168;
 const PAD = 28;
 const ROOT = '__root__';
 const WORK = '__work__';
@@ -125,7 +125,7 @@ export function BoardView({
   // レイアウト（自動）。hybrid のコミット位置・両モードの初期コミット位置に使う。
   const layout = useMemo(() => {
     const input = tree.ids.map((id) => ({ id, children: tree.children.get(id) ?? [] }));
-    return layoutNodes(input, { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 52 });
+    return layoutNodes(input, { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 60 });
   }, [tree]);
 
   // ---- サムネ生成 ----
