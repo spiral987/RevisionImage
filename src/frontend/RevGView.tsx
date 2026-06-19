@@ -9,14 +9,15 @@ import { downsampleBuffer } from '../engine/imageBuffer';
 import { layoutNodes } from '../backend/filters/layout';
 import { buildRevG, type RevGCluster } from '../backend/filters/importance';
 import { ROOT_ID } from '../backend/dag';
-import { bufferToDataURL } from './thumbnail';
+import { bufferToDataURL, THUMB_SCALE } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
 import { PopoverMenu, type MenuItem } from './Popover';
 import { useScrollZoom } from './useScrollZoom';
 
-const THUMB_W = 104; // サムネ生成サイズ（大きいカードでも粗くならないよう拡大）
-const THUMB_H = 78;
 const NODE_THUMB = 88; // カードのサムネ表示幅
+// 生成解像度＝表示の THUMB_SCALE 倍（高DPI・軽ズームで滲まない）。合成は元々フル解像度なので軽い。
+const THUMB_W = Math.round(NODE_THUMB * THUMB_SCALE);
+const THUMB_H = Math.round(NODE_THUMB * 0.75 * THUMB_SCALE);
 const NODE_W = 104; // レイアウト上のノード占有幅（カード幅＋余白）
 const NODE_H = 108;
 const PAD = 18;

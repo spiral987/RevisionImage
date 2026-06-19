@@ -15,14 +15,15 @@ import { flattenState } from '../engine/composite';
 import { createInitialState, getNode } from '../engine/editorState';
 import { cellPreviewState, listGroups } from '../backend/variant';
 import { layoutNodes } from '../backend/filters/layout';
-import { bufferToDataURL } from './thumbnail';
+import { bufferToDataURL, THUMB_SCALE } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
 import { PopoverMenu, type MenuItem } from './Popover';
 
-const THUMB_W = 184; // サムネ生成サイズ（大きいカードでも粗くならないよう拡大）
-const THUMB_H = 138;
 const CARD = 136; // カードのサムネ表示幅
 const CARD_H = Math.round(CARD * 0.75);
+// 生成解像度＝表示の THUMB_SCALE 倍（高DPI・軽ズームで滲まない）。合成は元々フル解像度なので軽い。
+const THUMB_W = Math.round(CARD * THUMB_SCALE);
+const THUMB_H = Math.round(CARD_H * THUMB_SCALE);
 const NODE_W = 156; // ツリー自動レイアウトのノード占有（カード幅＋余白）
 const NODE_H = 168;
 const PAD = 28;

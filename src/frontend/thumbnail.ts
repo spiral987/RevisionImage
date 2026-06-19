@@ -1,6 +1,17 @@
 import type { ImageBuffer } from '../types';
 
 /**
+ * サムネの生成解像度倍率（表示サイズに対して）。高DPI 表示や軽いズームで滲まないよう ≥2、上限 3。
+ * 重いのは flattenState（全レイヤ合成）で、これはサムネ寸法に依らず元々キャンバス解像度で実行＆キャッシュ済み。
+ * 寸法を上げても増えるのは縮小 drawImage と PNG encode・保持メモリだけ（=軽い）。
+ * bufferToDataURL は scale を 1 で頭打ちにするので、実解像度はキャンバス解像度が上限。
+ */
+export const THUMB_SCALE = Math.min(
+  3,
+  Math.max(2, Math.ceil((typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1)),
+);
+
+/**
  * フラット化済み ImageBuffer を縮小して dataURL(PNG) を返す（RevG ノードのサムネイル用）。
  * 元サイズの canvas に putImageData → 縮小先 canvas に drawImage（アスペクト比維持）。
  */
