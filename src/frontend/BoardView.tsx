@@ -225,6 +225,7 @@ export function BoardView({
   const suppressRef = useRef<string | null>(null);
   const onDown = (e: ReactPointerEvent, id: string, center: Pt, draggable: boolean) => {
     if (!draggable) return;
+    if (pending) return; // 比較/マージの相手選択中はドラッグせずクリック（選択確定）を優先
     const t = e.target as HTMLElement;
     if (t.closest('button, input, .thumb-card-hover, .thumb-card-corner')) return;
     dragRef.current = { id, sx: e.clientX, sy: e.clientY, bx: center.x, by: center.y, moved: false };
@@ -484,6 +485,7 @@ export function BoardView({
                   title={title}
                   state={state}
                   size={CARD}
+                  className={pending && isCommit && rev?.id !== pending.from.id ? 'pickable' : ''}
                   badge={isCommit ? <span className="revg-star">★</span> : isCurrent ? <span className="revg-now">●</span> : undefined}
                   onActivate={() => onNodeClick(id, rev)}
                   onDoubleClick={isCommit ? () => onCheckout(rev!) : undefined}

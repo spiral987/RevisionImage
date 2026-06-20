@@ -1494,6 +1494,13 @@ button.active {
   box-shadow: 0 0 0 1px #f2c94c;
 }
 
+/* 比較/マージの「2つ目を選択」待ち中、選択可能なカードを強調（Board/RevG 共通）。 */
+.thumb-card.pickable {
+  outline: 2px dashed #f2c94c;
+  outline-offset: 2px;
+  cursor: pointer;
+}
+
 .thumb-card.dead {
   opacity: 0.55;
   cursor: default;

@@ -255,6 +255,9 @@ export class EditorSession {
       timestamp: Date.now(),
     };
     this.revisions.push(rev);
+    // 確定後の編集が「コミット済み op」へ consolidate で吸収されないよう確定線を引く
+    // （同一 id ⟹ 同一内容 を保ち、merge/統合DAG の共有履歴識別を壊さない）。
+    this.logger.freeze();
     return rev;
   }
 
