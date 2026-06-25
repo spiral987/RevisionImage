@@ -1,8 +1,8 @@
-import type { BoardLayout, Operation, VariantAxis } from '../types';
+import type { BoardLayout, Operation } from '../types';
 import type { CommittedRevision } from './revision';
 
 // 永続化（SPEC §Phase7 / §2）。
-// プロジェクト = 操作ログ + リビジョン + 空間軸（DAG は log から決定的に再構築できるので保存不要）。
+// プロジェクト = 操作ログ + リビジョン（DAG は log から決定的に再構築できるので保存不要）。
 // シリアライズは純TS（テスト可能）、IndexedDB I/O は browser のみ。
 
 export interface ProjectJSON {
@@ -12,8 +12,6 @@ export interface ProjectJSON {
   height: number;
   log: Operation[];
   revisions: CommittedRevision[];
-  /** 空間軸（Variants）。旧バージョンの保存物には無いので optional（読み込み時 [] 既定）。 */
-  axes?: VariantAxis[];
   /** 盤面(Board) のカード自由配置。旧保存物には無いので optional（読み込み時 {} 既定）。 */
   boardLayout?: BoardLayout;
 }
@@ -23,7 +21,6 @@ export interface ProjectData {
   height: number;
   log: readonly Operation[];
   revisions: readonly CommittedRevision[];
-  axes?: readonly VariantAxis[];
   boardLayout?: BoardLayout;
 }
 
@@ -35,7 +32,6 @@ export function serializeProject(data: ProjectData): ProjectJSON {
     height: data.height,
     log: data.log.map((o) => o),
     revisions: data.revisions.map((r) => ({ ...r, ops: [...r.ops] })),
-    axes: (data.axes ?? []).map((a) => ({ ...a, cells: a.cells.map((c) => ({ ...c })) })),
     boardLayout: { ...(data.boardLayout ?? {}) },
   };
 }

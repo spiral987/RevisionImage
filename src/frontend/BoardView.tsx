@@ -1,5 +1,6 @@
 import {
   useDeferredValue,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -12,11 +13,11 @@ import type { CommittedRevision } from '../backend/revision';
 import type { BBox, Operation } from '../types';
 import { Replayer } from '../backend/replayer';
 import { flattenState } from '../engine/composite';
-import { createInitialState, getNode } from '../engine/editorState';
-import { cellPreviewState, listGroups } from '../backend/variant';
+import { createInitialState } from '../engine/editorState';
 import { layoutNodes } from '../backend/filters/layout';
 import { bufferToDataURL, THUMB_SCALE } from './thumbnail';
 import { ThumbCard, type ThumbCardState } from './ThumbCard';
+import { ConfirmButton } from './ConfirmButton';
 import { PopoverMenu, type MenuItem } from './Popover';
 import { Preview, type PreviewReq } from './Preview';
 
@@ -46,47 +47,43 @@ function opsMatchPrefix(prefix: readonly Operation[], log: readonly Operation[])
 }
 
 /**
- * 盤面(Board): Revisions(時間=コミットの木) と Variants(空間=差分セル) を1枚に統合したUI。
- * 全自由配置: コミットも差分セルも全部ドラッグで動かせる（木は初期配置のみ、以後はユーザ配置を優先）。
- * カード位置は session.boardLayout に永続化（リロードしても保たれる）。
- * 差分セルが過去版由来(sourceRevId)なら、その元コミットへ点線コネクタを引く（時間↔空間の橋）。
+ * 盤面(Board): コミットの木（時間=version の系統）を1枚に表すUI。コミットは全自由配置（ドラッグ）で、
+ * クリックでその版へ checkout（＝移動）、ホバーの ⋯ から比較/マージ/削除。
+ * 「分岐していること自体が別案（差分）」を木の形で表すので、差分を別途グループ化するUIは持たない。
  */
 export function BoardView({
   session,
   version,
+  active,
   onEdit,
   onCheckout,
   onCompareRevisions,
   onMergeRevisions,
   onCompareWithCurrent,
   onDeleteRevision,
-  onActivateLayer,
 }: {
   session: EditorSession;
   version: number;
+  /** 折りたたみ状態。閉じている間はサムネ合成も木の描画も行わない（描画中のコストを 0 にする）。 */
+  active: boolean;
   onEdit: () => void;
   onCheckout: (rev: CommittedRevision) => void;
   onCompareRevisions: (a: CommittedRevision, b: CommittedRevision) => void;
   onMergeRevisions: (trunk: CommittedRevision, branch: CommittedRevision) => void;
   onCompareWithCurrent: (rev: CommittedRevision) => void;
   onDeleteRevision: (rev: CommittedRevision) => void;
-  onActivateLayer: (layerId: string) => void;
 }) {
   const deferred = useDeferredValue(version);
   const revisions = session.revisions;
   const log = session.getLog();
 
   const [commitLabel, setCommitLabel] = useState('');
-  const [slotId, setSlotId] = useState('');
-  const [selected, setSelected] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewReq | null>(null);
   const [pending, setPending] = useState<{ action: 'compare' | 'merge'; from: CommittedRevision } | null>(
     null,
   );
 
-  // 位置は session.boardLayout（中心座標, 永続）に保存。seedRef は未配置セルの初期位置（非永続）。
-  // session の直接変更は React に追えないので、ドラッグ中は tick で再描画する。
-  const seedRef = useRef(new Map<string, Pt>());
+  // 位置は session.boardLayout（中心座標, 永続）に保存。session の直接変更は React に追えないので tick で再描画。
   const [, force] = useState(0);
   const tick = () => force((n) => n + 1);
 
@@ -141,30 +138,42 @@ export function BoardView({
     if (showWork) diffRegion.set(WORK, unionFrom(log, opsLenOf(workParent)));
 
     const ids = [ROOT, ...revisions.map((r) => r.id), ...(showWork ? [WORK] : [])];
-    // dagre 依存を避け、ここでは layoutNodes を使うため children を渡す。
     const currentId = exact ? exact.id : showWork ? WORK : ROOT;
     return { ids, children, showWork, currentId, diffRegion };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revisions, log.length]);
 
-  // レイアウト（自動）。hybrid のコミット位置・両モードの初期コミット位置に使う。
+  // レイアウト（自動）。コミットの初期配置に使う（以後はユーザ配置を優先）。
   const layout = useMemo(() => {
     const input = tree.ids.map((id) => ({ id, children: tree.children.get(id) ?? [] }));
     return layoutNodes(input, { nodeWidth: NODE_W, nodeHeight: NODE_H, rankSep: 60 });
   }, [tree]);
+
+  // 自動レイアウトは「初回配置の種」。新しく現れたノードの座標を一度だけ boardLayout に焼き付ける。
+  // 以後コミット追加・削除で木が変わっても dagre 再計算で既存ノードが動かない（getBoardPos 優先）。
+  // 種は決定的（自動レイアウト由来）なのでここで永続化（onEdit）はせず、次の編集保存に乗せれば十分。
+  useEffect(() => {
+    for (const id of tree.ids) {
+      if (session.getBoardPos(id)) continue;
+      const n = layout.nodes.get(id);
+      if (n) session.setBoardPos(id, n.x + PAD, n.y + PAD);
+    }
+  }, [tree, layout, session]);
 
   // ---- サムネ生成（差分領域だけを切り出す） ----
   const regionKey = (r: BBox | null | undefined) =>
     r ? `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)},${Math.round(r.h)}` : 'whole';
   const commitThumbRef = useRef(new Map<string, { rk: string; url: string }>());
   const treeThumbs = useMemo(() => {
+    // 折りたたみ中は誰も参照しない。全画面 flatten＋縮小（描画中の主コスト）を丸ごと省く。
+    // キャッシュ(commitThumbRef)は保持されるので、再展開時は WORK と変更分だけ作り直せばよい。
+    if (!active) return new Map<string, string>();
     const cache = commitThumbRef.current;
     const w = session.width;
     const h = session.height;
     const m = new Map<string, string>();
     m.set(ROOT, bufferToDataURL(flattenState(createInitialState(w, h)), THUMB_W, THUMB_H));
     for (const r of revisions) {
-      // 差分領域は木の形（親）に依存して変わりうるので region key で cache を無効化する。
       const region = tree.diffRegion.get(r.id) ?? null;
       const rk = regionKey(region);
       const c = cache.get(r.id);
@@ -175,26 +184,13 @@ export function BoardView({
       }
       m.set(r.id, cache.get(r.id)!.url);
     }
-    // 凍結コミット以外のキャッシュは掃除。
     const liveIds = new Set(revisions.map((r) => r.id));
     for (const id of [...cache.keys()]) if (!liveIds.has(id)) cache.delete(id);
     if (tree.showWork)
       m.set(WORK, bufferToDataURL(flattenState(session.state), THUMB_W, THUMB_H, tree.diffRegion.get(WORK)));
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deferred, revisions, tree]);
-
-  const cellThumbs = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const axis of session.axes) {
-      for (const cell of axis.cells) {
-        const st = cellPreviewState(session.state, axis, cell.id);
-        m.set(cell.id, bufferToDataURL(flattenState(st), THUMB_W, THUMB_H));
-      }
-    }
-    return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deferred]);
+  }, [active, deferred, revisions, tree]);
 
   // ---- 位置決定 ----
   const treeCenter = (id: string): Pt => {
@@ -202,21 +198,6 @@ export function BoardView({
     return n ? { x: n.x + PAD, y: n.y + PAD } : { x: PAD, y: PAD };
   };
   const commitCenter = (id: string): Pt => session.getBoardPos(id) ?? treeCenter(id);
-
-  // 差分セルの初期配置（木の右側に軸ごと積む）。一度決めたら seedRef で安定。
-  const treeRight = layout.width + PAD * 2;
-  const cellSeed = (axisIdx: number, cellIdx: number, id: string): Pt => {
-    const s = seedRef.current.get(id);
-    if (s) return s;
-    const seed = {
-      x: treeRight + 60 + cellIdx * (CARD + 26),
-      y: PAD + CARD_H / 2 + axisIdx * (CARD_H + 56),
-    };
-    seedRef.current.set(id, seed);
-    return seed;
-  };
-  const cellCenter = (id: string, axisIdx: number, cellIdx: number): Pt =>
-    session.getBoardPos(id) ?? cellSeed(axisIdx, cellIdx, id);
 
   // ---- ドラッグ（クリックと閾値で区別） ----
   const dragRef = useRef<{ id: string; sx: number; sy: number; bx: number; by: number; moved: boolean } | null>(
@@ -234,7 +215,6 @@ export function BoardView({
   const onMove = (e: ReactPointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
-    // 画面上の移動量はズーム倍率で割って盤面座標に直す。
     const dx = (e.clientX - d.sx) / zoomRef.current;
     const dy = (e.clientY - d.sy) / zoomRef.current;
     if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) return;
@@ -253,12 +233,17 @@ export function BoardView({
     if (d.moved) {
       suppressRef.current = d.id;
       onEdit(); // 配置の永続化（autosave をトリガ）
+    } else {
+      // 動いていない = タップ（クリック）。.board-card は pointer capture を張るため
+      // 合成 click/dblclick がカードに届かないことがある。主操作（checkout 等）はここで
+      // 直接発火する。後続で合成 click が来ても onClickCapture が suppressRef で二重発火を防ぐ。
+      suppressRef.current = d.id;
+      onNodeClick(d.id, revisions.find((r) => r.id === d.id) ?? null, e);
     }
     dragRef.current = null;
   };
   const onClickCapture = (e: ReactMouseEvent, id: string) => {
     if (zHeld) {
-      // ズーム操作中のカードクリック（トグル等）を無効化。
       e.stopPropagation();
       e.preventDefault();
       return;
@@ -274,6 +259,10 @@ export function BoardView({
   const { scrollRef, zoom, zoomRef, zHeld, onZoomDownCapture, onZoomMove, onZoomUp, resetZoom } =
     useScrollZoom();
 
+  // 折りたたみ中は本体を描画しない（27 枚のカード＋SVG の再 reconcile を毎ストローク避ける）。
+  // フックは上で全て呼び終えており、ref キャッシュも保持されるので順序・状態は壊れない。
+  if (!active) return null;
+
   // ---- 操作 ----
   const doCommit = () => {
     if (log.length === 0) return;
@@ -281,19 +270,11 @@ export function BoardView({
     setCommitLabel('');
     onEdit();
   };
-  const createFromFolder = () => {
-    if (!slotId) return;
-    const axis = session.addAxis('', slotId);
-    session.syncAxisCells(axis.id);
-    setSlotId('');
-    onEdit();
-  };
   const resetLayout = () => {
     session.clearBoardLayout();
-    seedRef.current.clear();
     onEdit();
   };
-  const onNodeClick = (id: string, rev: CommittedRevision | null) => {
+  const onNodeClick = (id: string, rev: CommittedRevision | null, e: ReactMouseEvent) => {
     if (pending) {
       if (rev && rev.id !== pending.from.id) {
         if (pending.action === 'compare') onCompareRevisions(pending.from, rev);
@@ -302,13 +283,10 @@ export function BoardView({
       setPending(null);
       return;
     }
-    setSelected((s) => (s === id ? null : id));
-  };
-  const gotoCommit = (revId: string) => {
-    setSelected(revId);
-    requestAnimationFrame(() =>
-      document.getElementById(`board-card-${revId}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }),
-    );
+    // 通常クリック = その版へ checkout（「クリック＝そこへ行く」）。非破壊なので誤爆コストは無し
+    // （未コミット作業は自動保存され、コミット済みは失われない）。今いる場所の再クリックは no-op。
+    // 起点/作業中（rev=null）はコミットでないので何もしない。
+    if (rev && id !== tree.currentId) onCheckout(rev);
   };
   const commitMenu = (rev: CommittedRevision): MenuItem[] => [
     { label: 'Checkout（この版へ分岐）', onClick: () => onCheckout(rev) },
@@ -323,21 +301,17 @@ export function BoardView({
       onClick: () => setPending({ action: 'merge', from: rev }),
     },
     { label: '現在の作業状態と比較', onClick: () => onCompareWithCurrent(rev) },
-    { label: 'Delete（このコミットを削除）', danger: true, onClick: () => onDeleteRevision(rev) },
   ];
 
-  // ---- 描画用の位置集計 ----
-  const positions = new Map<string, Pt>();
-  for (const id of tree.ids) positions.set(id, commitCenter(id));
-  session.axes.forEach((axis, ai) =>
-    axis.cells.forEach((cell, ci) => positions.set(cell.id, cellCenter(cell.id, ai, ci))),
-  );
+  // ---- 描画用の位置集計（コミット＝点） ----
   let maxX = 300;
   let maxY = 200;
-  for (const p of positions.values()) {
+  for (const id of tree.ids) {
+    const p = commitCenter(id);
     maxX = Math.max(maxX, p.x + CARD);
     maxY = Math.max(maxY, p.y + CARD_H);
   }
+
   const stageW = maxX + PAD;
   const stageH = maxY + PAD;
 
@@ -346,9 +320,8 @@ export function BoardView({
     const my = (a.y + b.y) / 2;
     return `M ${a.x},${a.y} C ${a.x},${my} ${b.x},${my} ${b.x},${b.y}`;
   };
-  const groups = listGroups(session.state);
 
-  // 原寸プレビュー: 木ノードはその状態を replay、セルは合成。差分領域はサムネと同じ（親からの変更領域）。
+  // 原寸プレビュー: 木ノードはその状態を replay。差分領域はサムネと同じ（親からの変更領域）。
   const openTreePreview = (id: string, rev: CommittedRevision | null) => {
     let buffer;
     let title;
@@ -365,9 +338,6 @@ export function BoardView({
     }
     setPreview({ title, buffer, diffRegion: tree.diffRegion.get(id) ?? null });
   };
-  const openCellPreview = (axis: (typeof session.axes)[number], cellId: string, name: string) => {
-    setPreview({ title: name, buffer: flattenState(cellPreviewState(session.state, axis, cellId)) });
-  };
 
   return (
     <div className="board">
@@ -380,18 +350,6 @@ export function BoardView({
         />
         <button onClick={doCommit} disabled={log.length === 0}>
           Commit
-        </button>
-        <select value={slotId} onChange={(e) => setSlotId(e.target.value)}>
-          <option value="">フォルダから軸…</option>
-          {groups.map((g) => (
-            <option key={g.id} value={g.id}>
-              {'　'.repeat(g.depth)}
-              {g.name}
-            </option>
-          ))}
-        </select>
-        <button onClick={createFromFolder} disabled={!slotId}>
-          軸追加
         </button>
         <span className="board-spacer" />
         <span className={`keyhint-badge ${zHeld ? 'on' : ''}`} title="Z を押しながら盤面を上下ドラッグでズーム">
@@ -406,9 +364,9 @@ export function BoardView({
       </div>
 
       <p className="hint">
-        木＝時間（version の系統。★=コミット, 青枠=今いる場所, ダブルクリックで Checkout, ⋯で比較/マージ/削除）。
-        カード＝空間（差分セル。クリックで表示トグル）。すべてドラッグで自由配置でき、位置は保存されます。
-        Z を押しながら上下ドラッグでズーム。過去版由来のセルは元コミットへ点線でつながります。
+        木＝時間（version の系統）。★=コミット, 青枠=今いる場所。<b>カードをクリックでその版へ Checkout（移動）</b>、
+        カードはドラッグで自由配置。ホバーの 🔍 で原寸プレビュー、⋯ から比較 / マージ / 削除。Z＋上下ドラッグでズーム。
+        枝分かれ自体が「対等な別案（差分）」を表します。
       </p>
 
       {pending && (
@@ -435,164 +393,73 @@ export function BoardView({
             style={{ width: stageW, height: stageH, transform: `scale(${zoom})`, transformOrigin: '0 0' }}
           >
             <svg className="board-svg" width={stageW} height={stageH} viewBox={`0 0 ${stageW} ${stageH}`}>
-            {/* 時間の木のエッジ */}
-            {layout.edges.map((e, i) => (
-              <path
-                key={`t-${e.from}-${e.to}-${i}`}
-                className="board-edge"
-                d={curve(commitCenter(e.from), commitCenter(e.to))}
-                fill="none"
-              />
-            ))}
-            {/* 出自コネクタ（差分セル → 元コミット） */}
-            {session.axes.flatMap((axis, ai) =>
-              axis.cells.map((cell, ci) => {
-                if (!cell.sourceRevId || !positions.has(cell.sourceRevId)) return null;
-                return (
-                  <path
-                    key={`s-${cell.id}`}
-                    className="board-srcline"
-                    d={curve(cellCenter(cell.id, ai, ci), commitCenter(cell.sourceRevId))}
-                    fill="none"
-                  />
-                );
-              }),
-            )}
-          </svg>
-
-          {/* 時間: コミット/起点/作業カード */}
-          {tree.ids.map((id) => {
-            const rev = revisions.find((r) => r.id === id) ?? null;
-            const c = commitCenter(id);
-            const isCurrent = id === tree.currentId;
-            const isCommit = !!rev;
-            const draggable = true; // 全自由配置: コミット/起点/作業も動かせる
-            const state: ThumbCardState = selected === id ? 'selected' : isCurrent ? 'current' : isCommit ? 'commit' : 'normal';
-            const title = rev ? `#${indexOfRev(rev)} ${rev.label}` : id === ROOT ? '起点' : '現在（作業中）';
-            return (
-              <div
-                key={id}
-                id={`board-card-${id}`}
-                className={`board-card ${draggable ? 'draggable' : ''}`}
-                style={{ left: c.x, top: c.y }}
-                onPointerDown={(e) => onDown(e, id, c, draggable)}
-                onPointerMove={onMove}
-                onPointerUp={onUp}
-                onClickCapture={(e) => onClickCapture(e, id)}
-              >
-                <ThumbCard
-                  thumb={treeThumbs.get(id)}
-                  title={title}
-                  state={state}
-                  size={CARD}
-                  className={pending && isCommit && rev?.id !== pending.from.id ? 'pickable' : ''}
-                  badge={isCommit ? <span className="revg-star">★</span> : isCurrent ? <span className="revg-now">●</span> : undefined}
-                  onActivate={() => onNodeClick(id, rev)}
-                  onDoubleClick={isCommit ? () => onCheckout(rev!) : undefined}
-                  hoverActions={
-                    <button className="tc-act" title="原寸プレビュー" onClick={() => openTreePreview(id, rev)}>
-                      🔍
-                    </button>
-                  }
-                  cornerMenu={
-                    isCommit ? (
-                      <PopoverMenu className="revg-card-menu" title="このコミットの操作" items={commitMenu(rev!)} />
-                    ) : undefined
-                  }
+              {/* 時間の木のエッジ */}
+              {layout.edges.map((e, i) => (
+                <path
+                  key={`t-${e.from}-${e.to}-${i}`}
+                  className="board-edge"
+                  d={curve(commitCenter(e.from), commitCenter(e.to))}
+                  fill="none"
                 />
-              </div>
-            );
-          })}
+              ))}
+            </svg>
 
-          {/* 空間: 差分セルカード */}
-          {session.axes.map((axis, ai) =>
-            axis.cells.map((cell, ci) => {
-              const node = getNode(session.state, cell.id);
-              const dead = !node;
-              const on = !!node?.visible;
-              const c = cellCenter(cell.id, ai, ci);
-              const srcLive = cell.sourceRevId && revisions.some((r) => r.id === cell.sourceRevId);
+            {/* 時間: コミット/起点/作業カード */}
+            {tree.ids.map((id) => {
+              const rev = revisions.find((r) => r.id === id) ?? null;
+              const c = commitCenter(id);
+              const isCurrent = id === tree.currentId;
+              const isCommit = !!rev;
+              const state: ThumbCardState = isCurrent ? 'current' : isCommit ? 'commit' : 'normal';
+              const title = rev ? `#${indexOfRev(rev)} ${rev.label}` : id === ROOT ? '起点' : '現在（作業中）';
               return (
                 <div
-                  key={cell.id}
-                  id={`board-card-${cell.id}`}
+                  key={id}
+                  id={`board-card-${id}`}
                   className="board-card draggable"
                   style={{ left: c.x, top: c.y }}
-                  onPointerDown={(e) => onDown(e, cell.id, c, true)}
+                  onPointerDown={(e) => {
+                    suppressRef.current = null; // 新しい操作の開始。前回のタップ/ドラッグの抑止フラグをクリア
+                    onDown(e, id, c, true);
+                  }}
                   onPointerMove={onMove}
                   onPointerUp={onUp}
-                  onClickCapture={(e) => onClickCapture(e, cell.id)}
+                  onClickCapture={(e) => onClickCapture(e, id)}
                 >
                   <ThumbCard
-                    thumb={cellThumbs.get(cell.id)}
-                    title={cell.name}
-                    state={on ? 'current' : 'normal'}
-                    dead={dead}
+                    thumb={treeThumbs.get(id)}
+                    title={title}
+                    state={state}
                     size={CARD}
-                    badge={dead ? '⚠' : on ? '☑' : '☐'}
-                    hint={ci === 0 ? <span className="board-axis-tag">{axis.name}</span> : undefined}
-                    onActivate={() => {
-                      session.toggleCell(axis.id, cell.id);
-                      onEdit();
-                    }}
-                    onRename={
-                      dead
-                        ? undefined
-                        : (n) => {
-                            session.renameCell(axis.id, cell.id, n);
-                            onEdit();
-                          }
-                    }
+                    className={pending && isCommit && rev?.id !== pending.from.id ? 'pickable' : ''}
+                    badge={isCommit ? <span className="revg-star">★</span> : isCurrent ? <span className="revg-now">●</span> : undefined}
+                    onActivate={(e) => onNodeClick(id, rev, e)}
                     hoverActions={
                       <>
-                        {!dead && (
-                          <button
-                            className="tc-act"
-                            title="原寸プレビュー"
-                            onClick={() => openCellPreview(axis, cell.id, cell.name)}
-                          >
-                            🔍
-                          </button>
-                        )}
-                        {!dead && (
-                          <button
-                            className="tc-act"
-                            title="このセルを作業対象として編集（pull）"
-                            onClick={() => {
-                              const leaf = session.pullCellToWorking(axis.id, cell.id);
-                              onEdit();
-                              if (leaf) onActivateLayer(leaf);
-                            }}
-                          >
-                            ✎
-                          </button>
-                        )}
-                        {srcLive && (
-                          <button
-                            className="tc-act"
-                            title="出自の版へ（時間の木で選択）"
-                            onClick={() => gotoCommit(cell.sourceRevId!)}
-                          >
-                            ⤴
-                          </button>
-                        )}
-                        <button
-                          className="tc-act danger"
-                          title="このセルを軸から外す（レイヤーは消えません）"
-                          onClick={() => {
-                            session.removeCell(axis.id, cell.id);
-                            onEdit();
-                          }}
-                        >
-                          ✕
+                        <button className="tc-act" title="原寸プレビュー" onClick={() => openTreePreview(id, rev)}>
+                          🔍
                         </button>
+                        {isCommit && (
+                          <ConfirmButton
+                            className="tc-act danger"
+                            clicks={3}
+                            idleLabel="🗑"
+                            armedLabel={(r) => `🗑${r}`}
+                            title="このコミットを削除（3 回クリックで実行・警告なし）。作業状態には影響しません。"
+                            onConfirm={() => onDeleteRevision(rev!)}
+                          />
+                        )}
                       </>
+                    }
+                    cornerMenu={
+                      isCommit ? (
+                        <PopoverMenu className="revg-card-menu" title="このコミットの操作" items={commitMenu(rev!)} />
+                      ) : undefined
                     }
                   />
                 </div>
               );
-            }),
-          )}
+            })}
           </div>
         </div>
       </div>

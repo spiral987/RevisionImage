@@ -65,6 +65,18 @@ export function blendPixel(
   if (x < 0 || y < 0 || x >= buf.width || y >= buf.height) return;
   const idx = (y * buf.width + x) * 4;
   const d = buf.data;
+  // 不透明高速パス（軽量化）: ソースアルファが 1 のとき source-over の結果は背景に依らず
+  // (r,g,b,255) に一致するので、除算群を丸ごと省いて直接代入できる。
+  //   sa=1 → outA = 1 + da*(1-1) = 1 → outR = r/255 → Math.round((r/255)*255) = r (0..255 全域で成立)。
+  // 呼び出し側の a は opacity(UI で 0.05..1 にクランプ)×coverage(≤1) なので a>=1 ⟺ a==1。
+  // r,g,b は 0..255 の整数（hexToRgb 由来）なので代入結果は従来のブレンド経路とビット同一。
+  if (a >= 1) {
+    d[idx] = r;
+    d[idx + 1] = g;
+    d[idx + 2] = b;
+    d[idx + 3] = 255;
+    return;
+  }
   const sa = a;
   const dr = d[idx] / 255;
   const dg = d[idx + 1] / 255;

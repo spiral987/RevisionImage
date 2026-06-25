@@ -430,11 +430,103 @@ body {
   margin: 0 0 10px;
 }
 
+/* ===== Debug 窓（バックエンド指標） ===== */
+.debug {
+  font-size: 12px;
+  min-width: 240px;
+}
+
+.debug-group {
+  margin: 10px 0 3px;
+  font-weight: 600;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
+}
+
+.debug-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.debug-label {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.debug-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-optypes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.debug-chip {
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-export {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.debug-copied {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.debug-json {
+  width: 100%;
+  height: 130px;
+  margin-top: 6px;
+  box-sizing: border-box;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  resize: vertical;
+  white-space: pre;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 .tool-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+/* 数回クリックで確定する破壊的ボタン（ConfirmButton）の armed 表示。 */
+.confirm-arming {
+  background: #3a1717 !important;
+  color: #eb5757 !important;
+  border-color: #6f2f2f !important;
+  animation: confirm-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes confirm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
+  }
 }
 
 button {
@@ -1677,9 +1769,24 @@ button.active {
 
 .var-pickrev {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.var-pickrev-head {
+  display: flex;
   gap: 6px;
   align-items: center;
-  margin-top: 6px;
+}
+
+/* 版のレイヤーをサムネで横並びに（はみ出しは横スクロール）。 */
+.var-pickrev-shelf {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding-bottom: 4px;
+  overflow-x: auto;
 }
 
 /* ===== PopoverMenu（body 直下に portal） ===== */
@@ -1924,12 +2031,4 @@ button.active {
 
 .board-card.draggable:active {
   cursor: grabbing;
-}
-
-.board-axis-tag {
-  padding: 0 4px;
-  font-size: 10px;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 999px;
 }

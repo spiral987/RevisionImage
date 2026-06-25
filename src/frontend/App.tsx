@@ -1,7 +1,7 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BBox, Operation } from '../types';
 import { EditorSession } from '../session';
-import { ROOT_ID } from '../backend/dag';
+import { ROOT_ID, createDag } from '../backend/dag';
 import { bboxIntersect } from '../backend/dependency';
 import type { CommittedRevision } from '../backend/revision';
 import {
@@ -15,7 +15,8 @@ import { DiffView } from './DiffView';
 import { MergeView } from './MergeView';
 import { BoardView } from './BoardView';
 import { RevGView } from './RevGView';
-import { FloatWindow } from './Float';
+import { DebugView } from './DebugView';
+import { FloatWindow, Section } from './Float';
 
 const SIZE_PRESETS: [number, number][] = [
   [640, 480],
@@ -40,9 +41,10 @@ export function App() {
   // RevG（解像度つき統合グラフ）ウインドウの展開状態。常時マウントしサムネキャッシュを温存し、
   // active で重い集約/レイアウトだけ切り替える。
   const [revgOpen, setRevgOpen] = useState(true);
+  // Board ウインドウの展開状態。RevG と同じく常時マウント＋active 切り替えで、閉じれば描画中の
+  // サムネ合成・カード再描画を 0 にできる（サムネキャッシュは温存）。
+  const [boardOpen, setBoardOpen] = useState(true);
   const [saved, setSaved] = useState(false);
-  // Variants の pull（セル→作業）で CanvasEditor のアクティブレイヤーを切り替える信号。
-  const [activeReq, setActiveReq] = useState<{ id: string; n: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const psdInputRef = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(false);
@@ -62,7 +64,6 @@ export function App() {
       height: session.height,
       log: session.getLog(),
       revisions: session.revisions,
-      axes: session.axes,
       boardLayout: session.boardLayout,
     });
 
@@ -181,17 +182,26 @@ export function App() {
       });
   };
 
-  // DAG/RevG の再構築は重い（全ログ replay + 各ノードのサムネイル生成）。version を遅延させ、
-  // 描画直後はキャンバス/カーソルを優先し、グラフ更新を低優先度の並行レンダーに回す
-  // （ストローク終了直後にカーソルが固まる問題の対策）。
-  const deferredVersion = useDeferredValue(version);
-  const dag = useMemo(() => session.getDag(), [deferredVersion, session]);
+  // DAG/RevG の再構築は重い。とくに dagre layout は数百ノードで 1 回 ~350ms かかり、これが
+  // 編集ごと（useDeferredValue でも描画の合間に走る）に動くと、履歴が長いほど描画がカクつく真因になる。
+  // そこで「最後の編集から少しアイドルしたら進む “落ち着いた版”」を導入し、重いグラフはそのときだけ
+  // 作り直す。キャンバス描画は version で即時更新されるため、グラフだけが少し遅れて追従する
+  // （RevG/Board はレビュー用途なので、描画バーストを 1 回にまとめて問題ない）。
+  const [settledVersion, setSettledVersion] = useState(version);
+  useEffect(() => {
+    const t = setTimeout(() => setSettledVersion(version), 300);
+    return () => clearTimeout(t);
+  }, [version]);
+
+  const dag = useMemo(() => session.getDag(), [settledVersion, session]);
 
   // 統合DAG: 全リビジョン + 作業ログを重ね、分岐/マージを1グラフに表す（統合 RevG の入力）。
-  // revisions の変化（commit/checkout/merge）でも再構築する。
+  // O(ブランチ数 × ノード²) と重いので、RevG を開いているか・ノード選択中（領域ハイライトに必要）の
+  // ときだけ構築する。閉じていて未選択なら誰も参照しないので空 DAG で済ませる。
+  const needUnifiedDag = revgOpen || selectedNodeId !== null;
   const unifiedDag = useMemo(
-    () => session.getUnifiedDag(),
-    [deferredVersion, revisions, session],
+    () => (needUnifiedDag ? session.getUnifiedDag() : createDag(session.width, session.height)),
+    [settledVersion, revisions, session, needUnifiedDag],
   );
 
   // RevG ノードのクリックで領域をハイライトする。統合DAGのノード（分岐側の固有ノードを含む）から引く。
@@ -239,6 +249,16 @@ export function App() {
 
   // コミット点（リビジョン）の削除。保存済みチェックポイントを消すだけで作業状態は不変。
   // 参照していた選択/比較/マージのペアは解除する。統合 RevG は revisions 変化で再構築される。
+  // 実削除（確認なし）。Board は 3 クリック削除ボタンが安全弁なのでこちらを直接呼ぶ。
+  const runDeleteRev = (rev: CommittedRevision) => {
+    session.deleteRevision(rev.id);
+    setRevisions([...session.revisions]);
+    setDiffPair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
+    setMergePair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
+    setSelectedNodeId(null);
+  };
+
+  // 確認つき削除（RevG の ⋯ メニュー用。メニュー項目は 3 クリック化できないので window.confirm）。
   const deleteRev = (rev: CommittedRevision) => {
     const i = revisions.findIndex((r) => r.id === rev.id);
     if (
@@ -247,11 +267,7 @@ export function App() {
       )
     )
       return;
-    session.deleteRevision(rev.id);
-    setRevisions([...session.revisions]);
-    setDiffPair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
-    setMergePair((p) => (p && (p[0].id === rev.id || p[1].id === rev.id) ? null : p));
-    setSelectedNodeId(null);
+    runDeleteRev(rev);
   };
 
   // selective undo（NRCI）: 指定操作と依存する後続を作業ログから除去する。NRCI は履歴(DAG)を消さない
@@ -308,7 +324,6 @@ export function App() {
         onEdit={onEdit}
         highlightRegion={selectedRegion}
         onRegionSelect={onCanvasRegionSelect}
-        activeLayerRequest={activeReq}
       />
 
       {/* 上部の細いフロートバー: タイトル + キャンバスサイズ + JSON 入出力 */}
@@ -377,24 +392,36 @@ export function App() {
         <span className="save-indicator">{saved ? '✓ 保存済み' : ''}</span>
       </div>
 
-      {/* 統合盤面: 時間(コミットの木) + 空間(差分セル) を1枚に（Revisions/Variants の統合実験）。 */}
+      {/* 盤面(Board): コミットの木（時間=version の系統）。枝分かれ自体が別案（差分）を表す。 */}
       <FloatWindow
         id="nrc-board"
         title="Board"
         defaultPos={{ left: 12, bottom: 12 }}
         className="float-board"
       >
-        <BoardView
-          session={session}
-          version={version}
-          onEdit={onEdit}
-          onCheckout={(rev) => checkout(rev)}
-          onCompareRevisions={(a, b) => setDiffPair([a, b])}
-          onMergeRevisions={(a, b) => setMergePair([a, b])}
-          onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
-          onDeleteRevision={(rev) => deleteRev(rev)}
-          onActivateLayer={(id) => setActiveReq((p) => ({ id, n: (p?.n ?? 0) + 1 }))}
-        />
+        <section className={`fsec ${boardOpen ? 'open' : 'closed'}`}>
+          <div className="fsec-head">
+            <button
+              className="fsec-toggle"
+              onClick={() => setBoardOpen((o) => !o)}
+              title={boardOpen ? '折りたたむ' : '展開'}
+            >
+              {boardOpen ? '−' : '+'}
+              <span className="fsec-title">Board</span>
+            </button>
+          </div>
+          <BoardView
+            session={session}
+            version={settledVersion}
+            active={boardOpen}
+            onEdit={onEdit}
+            onCheckout={(rev) => checkout(rev)}
+            onCompareRevisions={(a, b) => setDiffPair([a, b])}
+            onMergeRevisions={(a, b) => setMergePair([a, b])}
+            onCompareWithCurrent={(rev) => compareWithCurrent(rev)}
+            onDeleteRevision={(rev) => runDeleteRev(rev)}
+          />
+        </section>
       </FloatWindow>
 
       {/* RevG（解像度つき統合グラフ）: Board とは別ウインドウ。重要度集約のセマンティックズームを残す。 */}
@@ -421,7 +448,7 @@ export function App() {
             session={session}
             dag={unifiedDag}
             revisions={revisions}
-            version={deferredVersion}
+            version={settledVersion}
             active={revgOpen}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
@@ -434,6 +461,13 @@ export function App() {
             onBranchFrom={branchFrom}
           />
         </section>
+      </FloatWindow>
+
+      {/* Debug: バックエンドの規模・負荷指標。既定は折りたたみ（開いた時だけ集計＝負荷ゼロ）。 */}
+      <FloatWindow id="nrc-debug" title="Debug" defaultPos={{ right: 12, bottom: 12 }}>
+        <Section title="Backend stats" defaultOpen={false}>
+          <DebugView session={session} version={version} dag={dag} />
+        </Section>
       </FloatWindow>
 
       {diffPair && (

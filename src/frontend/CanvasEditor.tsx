@@ -54,6 +54,7 @@ import { compositeToCanvas } from './render';
 import { reorderIndex } from './layerDnd';
 import { describeOp } from './opLabel';
 import { ColorPicker } from './ColorPicker';
+import { ConfirmButton } from './ConfirmButton';
 import { FloatWindow, Section } from './Float';
 
 type Tool =
@@ -171,7 +172,6 @@ export function CanvasEditor({
   onEdit,
   highlightRegion,
   onRegionSelect,
-  activeLayerRequest,
 }: {
   session: EditorSession;
   width: number;
@@ -181,8 +181,6 @@ export function CanvasEditor({
   onEdit: () => void;
   highlightRegion: BBox | null;
   onRegionSelect: (bbox: BBox) => void;
-  /** 外部（Variants の pull 等）からアクティブレイヤーを指定する信号。n で再発火を保証。 */
-  activeLayerRequest?: { id: string; n: number } | null;
 }) {
   const replayerRef = useRef<Replayer | null>(null);
   if (!replayerRef.current) replayerRef.current = new Replayer(width, height);
@@ -231,7 +229,6 @@ export function CanvasEditor({
   const [tolerance, setTolerance] = useState(24);
   const [activeLayerId, setActiveLayerId] = useState(session.state.activeLayerId);
   // 複数選択（Ctrl/⌘+クリックで追加）。選択レイヤー群を一発で Variants 軸にするのに使う。
-  const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(new Set());
   const [histIndex, setHistIndex] = useState<number | null>(null);
   const [verify, setVerify] = useState<{ ok: boolean; msg: string } | null>(null);
   const [hovering, setHovering] = useState(false);
@@ -360,14 +357,6 @@ export function CanvasEditor({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
-
-  // Variants の pull（セル→作業）等、外部からのアクティブレイヤー指定。リーフのみ受け付ける。
-  useEffect(() => {
-    if (!activeLayerRequest) return;
-    const node = getNode(session.state, activeLayerRequest.id);
-    if (node && !isGroup(node)) setActiveLayerId(activeLayerRequest.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeLayerRequest]);
 
   const doUndo = () => {
     if (previewing) return;
@@ -568,6 +557,25 @@ export function CanvasEditor({
     const y = (e.clientY - rect.top) * (c.height / rect.height);
     const pressure = e.pointerType === 'mouse' ? 1 : e.pressure > 0 ? e.pressure : 0.5;
     return { x, y, pressure };
+  };
+
+  // 速い動きでは、ブラウザは複数の物理サンプルを1回の pointermove にまとめて(coalesce)配信する。
+  // getCoalescedEvents() で間引かれた中間サンプルまで取り出すと、粗い点を直線で結んだ多角形ではなく
+  // 実際の軌跡に沿った滑らかな線になる。返す点は「実入力サンプルそのもの」を順序通り記録するだけなので、
+  // rasterizeStroke の逐次区間補間・consolidate・replay のビット一致には影響しない（点が増えるだけ）。
+  const getCoalescedPoints = (e: ReactPointerEvent): StrokePoint[] => {
+    const native = e.nativeEvent;
+    const evs = typeof native.getCoalescedEvents === 'function' ? native.getCoalescedEvents() : [];
+    if (evs.length === 0) return [getPoint(e)];
+    const c = canvasRef.current!;
+    const rect = c.getBoundingClientRect(); // 矩形取得は1イベント1回だけ（点ごとには引かない）
+    const sx = c.width / rect.width;
+    const sy = c.height / rect.height;
+    return evs.map((ev) => ({
+      x: (ev.clientX - rect.left) * sx,
+      y: (ev.clientY - rect.top) * sy,
+      pressure: ev.pointerType === 'mouse' ? 1 : ev.pressure > 0 ? ev.pressure : 0.5,
+    }));
   };
 
   const sizeCanvas = (ref: MutableRefObject<HTMLCanvasElement | null>): HTMLCanvasElement => {
@@ -831,6 +839,60 @@ export function CanvasEditor({
   } | null>(null);
   const brushRafRef = useRef<number | null>(null);
 
+  // below/above（アクティブ層の下地・上層）の合成キャッシュ。連続して同じレイヤに短いストロークを
+  // 何本も引く間、アクティブ以外のレイヤ構成は変わらない（state は不変なので、非アクティブな最上位
+  // ノードは中身が変わらない限り参照が同一に保たれる＝構造共有）。そこで「非アクティブ最上位ノードの
+  // 参照列 ＋ アクティブ id ＋ キャンバスサイズ」を鍵にキャッシュし、合致すればジェスチャ境界の
+  // 主コストだった全画面 flatten 2 回（下地・上層）をまるごと省く（多レイヤで ~12ms/ジェスチャ）。
+  // プレビュー専用キャッシュなので replay/サムネイルのピクセル一致には一切影響しない。
+  const belowAboveCacheRef = useRef<{
+    activeId: string;
+    w: number;
+    h: number;
+    belowRefs: LayerNode[];
+    aboveRefs: LayerNode[];
+    below: HTMLCanvasElement;
+    above: HTMLCanvasElement;
+  } | null>(null);
+
+  const sameRefs = (a: LayerNode[], b: LayerNode[]): boolean =>
+    a.length === b.length && a.every((n, i) => n === b[i]);
+
+  // アクティブ層 k を境に下地(below)・上層(above)の焼き込み canvas を返す。非アクティブ層の構成が
+  // 前回と参照レベルで同一ならキャッシュを再利用する（= 同じレイヤへ続けて描く間は再 flatten しない）。
+  const getBelowAbove = (
+    layers: LayerNode[],
+    k: number,
+  ): { below: HTMLCanvasElement; above: HTMLCanvasElement } => {
+    const belowRefs = layers.slice(0, k);
+    const aboveRefs = layers.slice(k + 1);
+    const c = belowAboveCacheRef.current;
+    if (
+      c &&
+      c.activeId === activeLayerId &&
+      c.w === width &&
+      c.h === height &&
+      sameRefs(c.belowRefs, belowRefs) &&
+      sameRefs(c.aboveRefs, aboveRefs)
+    ) {
+      return { below: c.below, above: c.above };
+    }
+    const below = rasterizeBuffer(flattenState({ ...session.state, layers: belowRefs }));
+    const above = rasterizeBuffer(
+      flattenState({ ...session.state, layers: aboveRefs }, { background: [0, 0, 0, 0] }),
+    );
+    belowAboveCacheRef.current = {
+      activeId: activeLayerId,
+      w: width,
+      h: height,
+      belowRefs,
+      aboveRefs,
+      below,
+      above,
+    };
+    return { below, above };
+  };
+
   // ドラッグ開始時に1回だけ呼ぶ。ルート直下の可視リーフのときだけ増分プレビューを構築する
   // （グループ内/非表示は false を返し、呼び出し側が従来の決定的プレビューにフォールバック）。
   const buildBrushPreview = (firstPt: StrokePoint): boolean => {
@@ -859,11 +921,10 @@ export function CanvasEditor({
       tool === 'eraser'
         ? (buf, x, y, cov) => erasePixel(buf, x, y, op * cov)
         : (buf, x, y, cov) => blendPixel(buf, x, y, r, g, b, op * cov);
+    const { below, above } = getBelowAbove(layers, k);
     brushPreviewRef.current = {
-      below: rasterizeBuffer(flattenState({ ...session.state, layers: layers.slice(0, k) })),
-      above: rasterizeBuffer(
-        flattenState({ ...session.state, layers: layers.slice(k + 1) }, { background: [0, 0, 0, 0] }),
-      ),
+      below,
+      above,
       activeBuf,
       activeCanvas,
       activeImage,
@@ -1083,14 +1144,14 @@ export function CanvasEditor({
       }
     }
     if (drawingRef.current) {
-      const pt = getPoint(e);
-      drawingRef.current.strokes.push(pt);
-      if (brushPreviewRef.current) {
-        advanceBrush(pt); // 新区間だけ増分スタンプ（軽い）
-        scheduleBrushPreview(); // 合成は rAF で1フレーム1回に間引く
-      } else {
-        renderStrokePreview(drawingRef.current.strokes);
+      // 1イベントにまとまった中間サンプルを全て順序通り記録（速い線のファセット解消）。
+      const pts = getCoalescedPoints(e);
+      for (const pt of pts) {
+        drawingRef.current.strokes.push(pt);
+        if (brushPreviewRef.current) advanceBrush(pt); // 新区間だけ増分スタンプ（軽い）
       }
+      if (brushPreviewRef.current) scheduleBrushPreview(); // 合成は rAF で1フレーム1回に間引く
+      else renderStrokePreview(drawingRef.current.strokes);
     } else if (xformRef.current) {
       const g = xformRef.current;
       const pt = getPoint(e);
@@ -1165,9 +1226,14 @@ export function CanvasEditor({
                 height,
               );
         session.apply(op);
+        // onEdit() が version を進め、version 依存の useEffect が決定的 repaint を行う。ここで
+        // 同期 repaint を重ねると 1 ジェスチャあたり全画面 flatten が 2 回になるので確定時は省く
+        // （速い連続描画では React が再レンダーをまとめ、repaint 回数も自然に間引かれる）。確定前の
+        // プレビュー画像が effect 発火まで残るだけで、両者はほぼピクセル一致なので見た目の段差は出ない。
         onEdit();
+      } else {
+        repaint(); // 何も確定していない（誤クリック等）。残ったプレビューを消すだけ。
       }
-      repaint();
     } else if (xformRef.current) {
       const g = xformRef.current;
       xformRef.current = null;
@@ -1620,30 +1686,13 @@ export function CanvasEditor({
     repaint();
   };
 
-  // レイヤー名クリック: グループは開閉、リーフは選択。Ctrl/⌘ で複数選択にトグル追加。
-  const onLayerClick = (n: LayerNode, e: ReactMouseEvent) => {
+  // レイヤー名クリック: グループは開閉、リーフはアクティブ化。
+  const onLayerClick = (n: LayerNode) => {
     if (isGroup(n)) {
       toggleCollapse(n);
       return;
     }
     setActiveLayerId(n.id);
-    if (e.ctrlKey || e.metaKey) {
-      setSelectedLayerIds((prev) => {
-        const s = new Set(prev);
-        s.has(n.id) ? s.delete(n.id) : s.add(n.id);
-        return s;
-      });
-    } else {
-      setSelectedLayerIds(new Set([n.id]));
-    }
-  };
-
-  // 選択中のレイヤー群から「選択式(slotless)」の Variants 軸を作る（フォルダ不要）。
-  const createAxisFromSelection = () => {
-    if (previewing || selectedLayerIds.size === 0) return;
-    session.addAxisFromLayers('', [...selectedLayerIds]);
-    setSelectedLayerIds(new Set());
-    onEdit();
   };
 
   const onOpacityInput = (n: LayerNode, v: number) => {
@@ -1673,15 +1722,12 @@ export function CanvasEditor({
     const leaf = grp ? null : (n as Layer);
     const editing = editingLayerId === n.id;
     const active = !grp && n.id === activeLayerId;
-    const selected = !grp && selectedLayerIds.has(n.id);
     const disableDelete = previewing || leafCount() - collectLeafIds(n).length < 1;
     const dropCls = dropHint?.id === n.id ? ` drop-${dropHint.pos}` : '';
     return (
       <li
         key={n.id}
-        className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''} ${
-          selected ? 'selected' : ''
-        }${dropCls}`}
+        className={`layer-item ${grp ? 'is-group' : ''} ${active ? 'active' : ''}${dropCls}`}
       >
         <div className="layer-head" data-id={n.id} style={{ paddingLeft: 4 + depth * 12 }}>
           <span
@@ -1728,9 +1774,9 @@ export function CanvasEditor({
           ) : (
             <span
               className="layer-name"
-              onClick={(e) => onLayerClick(n, e)}
+              onClick={() => onLayerClick(n)}
               onDoubleClick={() => startRename(n)}
-              title="クリックで選択/開閉 / Ctrl・⌘+クリックで複数選択 / ダブルクリックで名称変更"
+              title="クリックで選択/開閉 / ダブルクリックで名称変更"
             >
               {grp ? '📁 ' : ''}
               {n.name}
@@ -1770,8 +1816,9 @@ export function CanvasEditor({
     );
   };
 
+  // Reset = 履歴の畳み込み。現在の絵（レイヤー構造）は残し、log・revisions・undo だけを捨てる。
   const reset = () => {
-    session.reset();
+    session.flattenToBaseline();
     setActiveLayerId(session.state.activeLayerId);
     setHistIndex(null);
     setVerify(null);
@@ -2070,13 +2117,6 @@ export function CanvasEditor({
             <button onClick={clearActiveLayer} disabled={previewing} title="アクティブレイヤーを全消去">
               Clear
             </button>
-            <button
-              onClick={createAxisFromSelection}
-              disabled={previewing || selectedLayerIds.size === 0}
-              title="選択したレイヤーを別案セルとして新しい Variants 軸に登録（フォルダ不要）"
-            >
-              → Variants ({selectedLayerIds.size})
-            </button>
           </div>
           <input
             ref={imageInputRef}
@@ -2126,7 +2166,12 @@ export function CanvasEditor({
             <button onClick={runVerify} disabled={log.length === 0}>
               Verify replay
             </button>
-            <button onClick={reset}>Reset</button>
+            <ConfirmButton
+              onConfirm={reset}
+              idleLabel="Reset"
+              armedLabel={(r) => (r > 1 ? `履歴を消す? あと${r}回` : 'あと1回で確定')}
+              title="編集履歴・revisions・undo を消去し、現在の絵を1枚のベースラインに畳む（絵・レイヤー構造は残る）。3クリックで実行"
+            />
           </div>
           {verify && <p className={verify.ok ? 'verify ok' : 'verify ng'}>{verify.msg}</p>}
           <ol className="op-log">

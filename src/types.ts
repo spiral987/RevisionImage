@@ -66,41 +66,11 @@ export interface Revision {
   timestamp: number;
 }
 
-// --- 空間軸（差分制作 / Variants） -----------------------------------------
-// CONCEPT.md §3.1 の「空間エッジ＝対等な別案」を、既存のレイヤー構造に被せる薄い関係層
-// として表す。DAG（操作依存）には入れず、スナップショット集合に対する「読み方」として持つ。
-// 詳細・設計の根拠は docs/mds/PLAN.md §2。
+// --- 盤面(Board) の配置（サイドカー） ---------------------------------------
 
 /**
- * 軸に属する1つの別案（セル）。実体は slot（差し替え点）配下の兄弟ノード。
- * id はそのノードの id（Layer または LayerGroup）に一致する。セル切替＝この id の
- * 表示/非表示なので、差分切替は既存の setLayerVisibility 操作で決定的に表現できる。
- */
-export interface VariantCell {
-  id: string; // = slot 配下の兄弟 nodeId（Layer / LayerGroup）
-  name: string;
-  /** 層2（CONCEPT §3.3）: あるリビジョン由来なら出自を保持する。時間→空間の橋。 */
-  sourceRevId?: string;
-}
-
-/**
- * 空間軸 ＝ 別案（セル）を束ねる単位（「目」「口」「トップス」…）。
- * 2 通りの作り方がある:
- *  - フォルダ式: slotId にフォルダ(差し替え点)を指定し、その子をセルにする（同期・退避が使える）。
- *  - 選択式(slotless): slotId を持たず、任意の場所のレイヤーを直接セルにする（フォルダ不要）。
- * どちらもセルは独立にトグル（表示/非表示）する読み。粒度は作家が選んだ単位で宣言される。
- */
-export interface VariantAxis {
-  id: string;
-  name: string;
-  /** フォルダ式のみ: 差し替え点フォルダの id。選択式(slotless)では undefined。 */
-  slotId?: string;
-  cells: VariantCell[]; // 順序付きセル一覧。各セルは独立にトグル（表示/非表示）する。
-}
-
-/**
- * 盤面(Board) 上のカード配置（自由配置の永続化）。キー = コミット(リビジョン)id / セル(レイヤー)id /
- * 起点・作業ノードの予約 id。値 = 中心座標。操作ログ・DAG とは無関係なサイドカー（Variants と同じ扱い）。
+ * 盤面(Board) 上のカード配置（自由配置の永続化）。キー = コミット(リビジョン)id /
+ * 起点・作業ノードの予約 id。値 = 中心座標。操作ログ・DAG とは無関係なサイドカー。
  */
 export type BoardLayout = Record<string, { x: number; y: number }>;
 

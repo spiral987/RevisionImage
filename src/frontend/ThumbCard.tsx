@@ -39,8 +39,8 @@ export function ThumbCard({
   starred?: boolean;
   /** カード下のタイトル横に出す小バッジ（出自など）。 */
   hint?: ReactNode;
-  /** カードクリック＝主操作（トグル/切替など）。 */
-  onActivate?: () => void;
+  /** カードクリック＝主操作（トグル/切替など）。修飾キー判定用に MouseEvent を渡す。 */
+  onActivate?: (e: React.MouseEvent) => void;
   /** ダブルクリック（Revisions の木では「このコミットへ checkout」）。 */
   onDoubleClick?: () => void;
   /** 名前のインライン改名。無ければ名前は読み取り専用。 */
@@ -80,7 +80,7 @@ export function ThumbCard({
     <div
       className={`thumb-card ${state} ${dead ? 'dead' : ''} ${className}`}
       style={{ width: size + 8 }}
-      onClick={() => !dead && onActivate?.()}
+      onClick={(e) => !dead && onActivate?.(e)}
       onDoubleClick={() => !dead && onDoubleClick?.()}
     >
       <div className="thumb-card-img" style={{ width: size, height: Math.round(size * ratio) }}>

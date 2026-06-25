@@ -22,6 +22,7 @@ import {
 } from './layerOps';
 import { fillHandler } from './fill';
 import { transformHandler } from './transform';
+import { baselineHandler } from './baseline';
 
 registerOp(brushHandler);
 registerOp(eraserHandler);
@@ -42,6 +43,7 @@ registerOp(addGroupHandler);
 registerOp(setGroupCollapsedHandler);
 registerOp(fillHandler);
 registerOp(transformHandler);
+registerOp(baselineHandler);
 
 export { brushHandler, createBrushOp, type BrushParams } from './brush';
 export { eraserHandler, createEraserOp, type EraserParams } from './eraser';
@@ -78,3 +80,4 @@ export {
 } from './layerOps';
 export { fillHandler, createFillOp, fillRegion, type FillParams } from './fill';
 export { transformHandler, createTransformOp, type TransformParams } from './transform';
+export { baselineHandler, createBaselineOp, type BaselineParams } from './baseline';

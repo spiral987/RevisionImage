@@ -47,6 +47,16 @@ export function describeOp(op: Operation): string {
       const deg = Math.round((Math.atan2(b, a) * 180) / Math.PI);
       return `${sx.toFixed(2)}× ${deg}°`;
     }
+    case 'baseline': {
+      // base64 を含むので JSON 化はしない。畳み込んだリーフ数だけ示す。
+      const countLeaves = (nodes: unknown[]): number =>
+        nodes.reduce<number>((n, raw) => {
+          const node = raw as { children?: unknown[] };
+          return n + (node.children ? countLeaves(node.children) : 1);
+        }, 0);
+      const tree = (p.tree as unknown[]) ?? [];
+      return `flatten · ${countLeaves(tree)} layers`;
+    }
     default:
       return JSON.stringify(p);
   }

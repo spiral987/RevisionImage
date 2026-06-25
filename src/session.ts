@@ -1,23 +1,13 @@
-import type { BoardLayout, Dag, EditorState, Operation, VariantAxis, VariantCell } from './types';
+import type { BoardLayout, Dag, EditorState, LayerNode, Operation } from './types';
 import { applyOperation } from './engine/operation';
-import { createInitialState, getNode } from './engine/editorState';
-import { isGroup, firstLeafId } from './engine/layer';
+import { createInitialState } from './engine/editorState';
+import { isGroup } from './engine/layer';
 import './engine/operations'; // 操作ハンドラを登録
-import {
-  createAddImageLayerOp,
-  createMoveNodeOp,
-  createSetLayerVisibilityOp,
-} from './engine/operations';
+import { createBaselineOp } from './engine/operations';
 import { Logger } from './backend/logger';
 import { buildDag } from './backend/dagBuilder';
 import { ROOT_ID, descendantsOf } from './backend/dag';
-import {
-  buildUnifiedDag,
-  computeHeads,
-  revisionPiece,
-  type CommittedRevision,
-} from './backend/revision';
-import { selectionOps, slotChildren, slotPiece } from './backend/variant';
+import { buildUnifiedDag, computeHeads, type CommittedRevision } from './backend/revision';
 import { genId } from './util/id';
 
 /**
@@ -43,13 +33,8 @@ export class EditorSession {
   readonly logger = new Logger();
   revisions: CommittedRevision[] = [];
   /**
-   * 空間軸（差分制作 / Variants）。CONCEPT §3.1 の空間エッジを、操作ログ・DAG とは別の
-   * サイドカーとして保持する（操作依存グラフの不変条件に触れない）。永続化対象。
-   */
-  axes: VariantAxis[] = [];
-  /**
-   * 盤面(Board) のカード自由配置（中心座標）。操作ログ・DAG に無関係なサイドカー（[[axes]] と同様）。
-   * キー = コミット id / セル(レイヤー) id / 起点・作業の予約 id。永続化対象。
+   * 盤面(Board) のカード自由配置（中心座標）。操作ログ・DAG に無関係なサイドカー。
+   * キー = コミット id / 起点・作業の予約 id。永続化対象。
    */
   boardLayout: BoardLayout = {};
   width: number;
@@ -177,6 +162,69 @@ export class EditorSession {
     return this.logger.getLog();
   }
 
+  /**
+   * バックエンドの規模・負荷指標をまとめて返す（Debug ウィンドウ用）。DAG は構築せず O(総op) で集計する
+   * （ノード数 = op数+ROOT。各 op が1ノード）。重い RevG レイアウト等の負荷の当たりを付けるのに使う。
+   */
+  getStats(): {
+    width: number;
+    height: number;
+    logOps: number;
+    dagNodes: number;
+    revisions: number;
+    revisionOps: number;
+    uniqueOps: number;
+    boardEntries: number;
+    undoDepth: number;
+    redoDepth: number;
+    layers: number;
+    groups: number;
+    strokePoints: number;
+    opTypeCounts: Record<string, number>;
+  } {
+    const log = this.getLog();
+    const opTypeCounts: Record<string, number> = {};
+    let strokePoints = 0;
+    const ids = new Set<string>();
+    for (const op of log) {
+      opTypeCounts[op.type] = (opTypeCounts[op.type] ?? 0) + 1;
+      strokePoints += op.strokes?.length ?? 0;
+      ids.add(op.id);
+    }
+    let revisionOps = 0;
+    for (const r of this.revisions) {
+      revisionOps += r.ops.length;
+      for (const op of r.ops) ids.add(op.id); // 共有プレフィックスは同一 id で重複排除
+    }
+    let layers = 0;
+    let groups = 0;
+    const walk = (nodes: LayerNode[]) => {
+      for (const n of nodes) {
+        if (isGroup(n)) {
+          groups++;
+          walk(n.children);
+        } else layers++;
+      }
+    };
+    walk(this.state.layers);
+    return {
+      width: this.width,
+      height: this.height,
+      logOps: log.length,
+      dagNodes: log.length + 1, // +ROOT
+      revisions: this.revisions.length,
+      revisionOps,
+      uniqueOps: ids.size,
+      boardEntries: Object.keys(this.boardLayout).length,
+      undoDepth: this.undoStack.length,
+      redoDepth: this.redoStack.length,
+      layers,
+      groups,
+      strokePoints,
+      opTypeCounts,
+    };
+  }
+
   /** 現在のログから DAG（Algorithm 1）を構築する。RevG 可視化(Phase 4)の入力。 */
   getDag(): Dag {
     return buildDag(this.getLog(), this.width, this.height);
@@ -271,52 +319,8 @@ export class EditorSession {
   deleteRevision(id: string): boolean {
     const before = this.revisions.length;
     this.revisions = this.revisions.filter((r) => r.id !== id);
+    delete this.boardLayout[id]; // 盤面の固定座標も後始末（残っても無害だが溜めない）
     return this.revisions.length !== before;
-  }
-
-  // ---- 空間軸（差分制作 / Variants） ---------------------------------------
-  // CONCEPT §3.1 / §3.4。データモデルのみ（UI は別フェーズ）。
-
-  /** 差し替え点(slotId)に対する空間軸を新規作成する。cells は空で始まる。 */
-  addAxis(name: string, slotId: string): VariantAxis {
-    const axis: VariantAxis = {
-      id: genId('axis'),
-      name: name && name.trim() ? name.trim() : `軸 ${this.axes.length + 1}`,
-      slotId,
-      cells: [],
-    };
-    this.axes.push(axis);
-    return axis;
-  }
-
-  /**
-   * 任意の場所のレイヤー群から「選択式(slotless)」の軸を作る（フォルダ不要）。CONCEPT §3.1。
-   * 差し替え点フォルダを持たず、与えた layer をそのまま別案セルにする。レイヤーツリーは変更せず、
-   * 「これらは対等な別案だ」という読み（可視のトグル）を被せるだけ。存在するノードのみ採用する。
-   */
-  addAxisFromLayers(name: string, layerIds: readonly string[]): VariantAxis {
-    const axis: VariantAxis = {
-      id: genId('axis'),
-      name: name && name.trim() ? name.trim() : `軸 ${this.axes.length + 1}`,
-      cells: [],
-    };
-    for (const id of layerIds) {
-      const node = getNode(this.state, id);
-      if (node && !axis.cells.some((c) => c.id === id)) axis.cells.push({ id, name: node.name });
-    }
-    this.axes.push(axis);
-    return axis;
-  }
-
-  /** 軸を削除する（レイヤー実体・作業状態には触れない。読み方を消すだけ）。 */
-  removeAxis(axisId: string): boolean {
-    const before = this.axes.length;
-    this.axes = this.axes.filter((a) => a.id !== axisId);
-    return this.axes.length !== before;
-  }
-
-  getAxis(axisId: string): VariantAxis | undefined {
-    return this.axes.find((a) => a.id === axisId);
   }
 
   // ---- 盤面(Board) の自由配置（サイドカー） ----
@@ -331,169 +335,6 @@ export class EditorSession {
   /** 自由配置をすべて消す（= 自動整列に戻す）。 */
   clearBoardLayout(): void {
     this.boardLayout = {};
-  }
-
-  /** 軸名を変更する（サイドカーの注釈のみ。レイヤー実体・replay には無関係）。空文字は無視。 */
-  renameAxis(axisId: string, name: string): boolean {
-    const axis = this.getAxis(axisId);
-    const next = name.trim();
-    if (!axis || !next || axis.name === next) return false;
-    axis.name = next;
-    return true;
-  }
-
-  /** セル名を変更する（サイドカーの注釈のみ）。空文字は無視。 */
-  renameCell(axisId: string, cellId: string, name: string): boolean {
-    const axis = this.getAxis(axisId);
-    const next = name.trim();
-    if (!axis || !next) return false;
-    const cell = axis.cells.find((c) => c.id === cellId);
-    if (!cell || cell.name === next) return false;
-    cell.name = next;
-    return true;
-  }
-
-  /** 軸にセルを登録する。cell.id（= slot 配下の兄弟 nodeId）が既出なら冪等に無視。 */
-  addCell(axisId: string, cell: VariantCell): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis || axis.cells.some((c) => c.id === cell.id)) return false;
-    axis.cells.push({ id: cell.id, name: cell.name, sourceRevId: cell.sourceRevId });
-    return true;
-  }
-
-  /**
-   * 軸のセルを slot グループの現在の直下の子と同期する（差分制作のオーサリング導線）。
-   * slot 直下にあって未登録の子をセルに追加し、もう slot 直下に無いセルを除去する。
-   * 既存セルの順序・名前・sourceRevId は保つ。変化があれば true。
-   */
-  syncAxisCells(axisId: string): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis || !axis.slotId) return false; // 選択式(slotless)は同期対象のフォルダを持たない
-    const children = slotChildren(this.state, axis.slotId);
-    const childIds = new Set(children.map((c) => c.id));
-    let changed = false;
-    for (const c of children) {
-      if (!axis.cells.some((x) => x.id === c.id)) {
-        axis.cells.push({ id: c.id, name: c.name });
-        changed = true;
-      }
-    }
-    const kept = axis.cells.filter((x) => childIds.has(x.id));
-    if (kept.length !== axis.cells.length) {
-      axis.cells = kept;
-      changed = true;
-    }
-    return changed;
-  }
-
-  removeCell(axisId: string, cellId: string): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis) return false;
-    const before = axis.cells.length;
-    axis.cells = axis.cells.filter((c) => c.id !== cellId);
-    return axis.cells.length !== before;
-  }
-
-  /** 軸内のセル順を変更する（行列UIでの並べ替え用）。 */
-  reorderCell(axisId: string, cellId: string, toIndex: number): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis) return false;
-    const from = axis.cells.findIndex((c) => c.id === cellId);
-    if (from < 0) return false;
-    const to = Math.max(0, Math.min(axis.cells.length - 1, toIndex));
-    if (from === to) return false;
-    const cells = [...axis.cells];
-    const [moved] = cells.splice(from, 1);
-    cells.splice(to, 0, moved);
-    axis.cells = cells;
-    return true;
-  }
-
-  /**
-   * 軸のセルをトグル（表示/非表示を反転）する。可視が変わったら表示 op を適用して true。
-   * 選択は表示 op としてログに残るので replay/commit 整合（差分切替が版に焼ける）。
-   */
-  toggleCell(axisId: string, cellId: string): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis) return false;
-    const ops = selectionOps(axis, this.state, cellId);
-    if (ops.length === 0) return false;
-    this.applyBatch(ops);
-    return true;
-  }
-
-  /**
-   * 過去のコミット(リビジョン)をこの軸の別案セルとして取り込む（時間→空間の昇格, CONCEPT §3.3）。
-   * リビジョンの内容ピースを slot フォルダ内の新レイヤーとして配置し、セルに登録する
-   * （sourceRevId に出自を保持＝時間の読みとの橋）。取り込んだセルは初期は非表示にして現在の
-   * 合成を乱さない（Variants でトグルしてプレビュー/採用する）。成功で true。
-   */
-  addRevisionAsCell(axisId: string, rev: CommittedRevision): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis) return false;
-    if (axis.slotId) {
-      const slot = getNode(this.state, axis.slotId);
-      if (!slot || !isGroup(slot)) return false; // フォルダ式: slot はフォルダのみ
-    }
-    const piece = revisionPiece(rev, this.width, this.height);
-    if (!piece) return false; // 何も描かれていない版
-    const layerId = genId('layer');
-    const ops: Operation[] = [
-      createAddImageLayerOp(layerId, rev.label, piece.buffer, piece.x, piece.y, this.width, this.height),
-    ];
-    // フォルダ式は slot フォルダ末尾へ。選択式(slotless)は最上位のまま（addImageLayer の既定位置）。
-    if (axis.slotId) ops.push(createMoveNodeOp(layerId, axis.slotId, 1e9));
-    ops.push(createSetLayerVisibilityOp(layerId, false)); // 初期は非表示
-    this.applyBatch(ops);
-    this.addCell(axisId, { id: layerId, name: rev.label, sourceRevId: rev.id });
-    return true;
-  }
-
-  /**
-   * park（退避, CONCEPT §3.4）: 現在の slot の見た目を 1 枚のスナップショットに焼いて
-   * 新しい別案セルとして構造へ送り、作業ビューをクリアする（＝作業スタックが軽くなる）。
-   * 非破壊: 元の子は削除せず非表示にするだけ。退避セルも初期は非表示で、Variants でトグルすれば
-   * いつでも引き戻せる（pull）。slot に見えるものが無ければ false。
-   */
-  parkSlot(axisId: string): boolean {
-    const axis = this.getAxis(axisId);
-    if (!axis || !axis.slotId) return false; // フォルダ式のみ（選択式は退避対象の領域を持たない）
-    const slotId = axis.slotId;
-    const slot = getNode(this.state, slotId);
-    if (!slot || !isGroup(slot)) return false;
-    const piece = slotPiece(this.state, slotId);
-    if (!piece) return false; // 見えているものが無い
-    const layerId = genId('layer');
-    const name = `退避 ${axis.cells.length + 1}`;
-    const ops: Operation[] = [];
-    // 現在見えている slot 直下の子を非表示にして作業ビューを空にする（非破壊）。
-    for (const child of slot.children) {
-      if (child.visible) ops.push(createSetLayerVisibilityOp(child.id, false));
-    }
-    // 焼いたスナップショットを slot 内の隠しレイヤーとして足す。
-    ops.push(
-      createAddImageLayerOp(layerId, name, piece.buffer, piece.x, piece.y, this.width, this.height),
-    );
-    ops.push(createMoveNodeOp(layerId, slotId, 1e9));
-    ops.push(createSetLayerVisibilityOp(layerId, false));
-    this.applyBatch(ops);
-    this.addCell(axisId, { id: layerId, name });
-    return true;
-  }
-
-  /**
-   * pull（引き出し, CONCEPT §3.4）: 空間のセルを時間軸の作業対象として引き出す。セルを可視にし、
-   * 編集対象にすべきリーフ layer の id を返す（セルがフォルダなら最初のリーフ）。UI 側はこの id を
-   * CanvasEditor のアクティブレイヤーに設定する。セルが無ければ null。
-   */
-  pullCellToWorking(axisId: string, cellId: string): string | null {
-    const axis = this.getAxis(axisId);
-    if (!axis || !axis.cells.some((c) => c.id === cellId)) return null;
-    const node = getNode(this.state, cellId);
-    if (!node) return null;
-    const leaf = isGroup(node) ? firstLeafId([node]) ?? null : node.id;
-    if (!node.visible) this.apply(createSetLayerVisibilityOp(cellId, true));
-    return leaf;
   }
 
   /**
@@ -525,7 +366,6 @@ export class EditorSession {
     height?: number;
     log: readonly Operation[];
     revisions: readonly CommittedRevision[];
-    axes?: readonly VariantAxis[];
     boardLayout?: BoardLayout;
   }): void {
     if (typeof p.width === 'number' && typeof p.height === 'number') {
@@ -540,20 +380,29 @@ export class EditorSession {
       timestamp: r.timestamp,
       ops: [...r.ops],
     }));
-    this.axes = (p.axes ?? []).map((a) => ({
-      id: a.id,
-      name: a.name,
-      slotId: a.slotId,
-      cells: a.cells.map((c) => ({ id: c.id, name: c.name, sourceRevId: c.sourceRevId })),
-    }));
     this.boardLayout = { ...(p.boardLayout ?? {}) };
   }
 
+  /**
+   * 履歴を畳む（"flatten / baseline"）。現在の見た目（レイヤーツリー全体）を1つの baseline op に
+   * シリアライズしてログを作り直し、過去のログ・revisions・軸・盤面・undo/redo を捨てる。
+   * 絵（レイヤー構造・不透明度・表示/非表示・名前・画素）はそのまま残り、履歴だけが消える。
+   * restore で state を baseline op から再構築するので不変条件 state === replay(log) を厳守する。
+   */
+  flattenToBaseline(): void {
+    const op = createBaselineOp(this.state, this.width, this.height);
+    this.restore([op]); // setLog + 初期状態から replay → state は現在の見た目に一致
+    this.revisions = [];
+    this.boardLayout = {};
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+
+  /** 完全初期化（白紙）。レイヤーも含め全消去して初期状態へ戻す。 */
   reset(): void {
     this.state = createInitialState(this.width, this.height);
     this.logger.clear();
     this.revisions = [];
-    this.axes = [];
     this.boardLayout = {};
     this.undoStack = [];
     this.redoStack = [];
